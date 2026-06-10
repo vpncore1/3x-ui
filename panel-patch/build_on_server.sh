@@ -2,8 +2,9 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Always use this script's directory (panel-patch/), ignore PATCH_DIR from parent.
+PATCH_DIR="$SCRIPT_DIR"
 BUILD_DIR="${BUILD_DIR:-/opt/3x-ui-build}"
-PATCH_DIR="${PATCH_DIR:-$SCRIPT_DIR}"
 TAG="${XUI_TAG:-v3.3.0}"
 INSTALL_BIN="${INSTALL_BIN:-/usr/local/x-ui/x-ui}"
 LOCK="/tmp/panel-patch-build.lock"

@@ -58,7 +58,6 @@ else
   git -C "$PATCH_DIR" remote set-url origin "https://github.com/${GITHUB_USER}/${REPO_NAME}.git"
 fi
 
-export PATCH_DIR
 export XUI_TAG
 export BUILD_DIR="${BUILD_DIR:-/opt/3x-ui-build}"
 export INSTALL_BIN="/usr/local/x-ui/x-ui"

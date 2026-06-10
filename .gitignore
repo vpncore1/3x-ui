@@ -1,0 +1,33 @@
+# Build artifacts
+/opt/
+*.tar.gz
+*.log
+
+# Old standalone sync (not part of this panel)
+xui_sub_sync/
+main.py
+requirements.txt
+
+# Dev / deploy helpers (local only, may contain secrets)
+scripts/
+server_status.txt
+PANEL_GUIDE.md
+
+# Python
+__pycache__/
+*.pyc
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+.env
+.env.*
+
+# Go / Node (when building locally)
+node_modules/
+vendor/
+build/
+dist/

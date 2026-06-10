@@ -21,7 +21,9 @@ fi
 echo -e "${green}==> Fetch patch repo${plain}"
 apt-get install -y -qq git curl rsync build-essential >/dev/null 2>&1 || true
 
-if [[ -d "$PATCH_DIR/.git" ]]; then
+if [[ -f "$PATCH_DIR/panel-patch/build_on_server.sh" ]]; then
+  echo "Using existing patch at $PATCH_DIR"
+elif [[ -d "$PATCH_DIR/.git" ]]; then
   git -C "$PATCH_DIR" fetch origin "$REPO_BRANCH"
   git -C "$PATCH_DIR" reset --hard "origin/$REPO_BRANCH"
 else

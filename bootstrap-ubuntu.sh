@@ -2,7 +2,7 @@
 # Paste and run as root on Ubuntu — one block, verbose output.
 set -ex
 
-GITHUB_TOKEN="${GITHUB_TOKEN:-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}"
+: "${GITHUB_TOKEN:?Set GITHUB_TOKEN first: export GITHUB_TOKEN=gho_xxxx}"
 PATCH_DIR="/opt/3x-ui-sub-balancer"
 TOKEN_FILE="/root/.3x-ui-sub-balancer-token"
 

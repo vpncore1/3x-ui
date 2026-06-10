@@ -1,73 +1,53 @@
-# 3x-ui Sub Balancer
+# 3x-ui Sub Balancer (Private)
 
-پچ رسمی [3x-ui](https://github.com/MHSanaei/3x-ui) برای **ساب‌اسکریپشن اوتباند + بالانسر** داخل خود پنل — بدون اسکریپت خارجی.
+پچ [3x-ui](https://github.com/MHSanaei/3x-ui) برای **ساب + بالانسر** داخل پنل — ریپوی **خصوصی** فقط برای `sader21`.
 
-## قابلیت‌ها
+## نصب روی سرور
 
-- فیلد **نام بالانسر** در فرم Subscriptions (Outbounds → Subscriptions)
-- آپدیت خودکار اوتباندها از لینک ساب
-- sync بالانسر با لیست اوتباندها (selector = تگ‌های واقعی)
-- Routing Rules دستی توسط شما در پنل
-- پشتیبانی فارسی در UI
+### ۱) ساخت Token (یک‌بار)
 
-## نصب روی سرور لینوکس (تازه)
+GitHub → **Settings** → **Developer settings** → **Personal access tokens** → **Tokens (classic)** → Generate
 
-```bash
-bash <(curl -Ls https://raw.githubusercontent.com/sader21/3x-ui-sub-balancer/main/install.sh)
-```
+- Scope: **`repo`** (دسترسی به ریپوی private)
+- توکن را کپی کن
 
-این دستور:
-1. اگر 3x-ui نصب نیست → پنل رسمی را نصب می‌کند
-2. سپس پچ را build و جایگزین می‌کند
-
-## آپگرید (سرور که الان 3x-ui دارد)
+### ۲) نصب تازه
 
 ```bash
-bash <(curl -Ls https://raw.githubusercontent.com/sader21/3x-ui-sub-balancer/main/upgrade.sh)
+export GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxx
+git clone https://x-access-token:${GITHUB_TOKEN}@github.com/sader21/3x-ui-sub-balancer.git /opt/3x-ui-sub-balancer
+bash /opt/3x-ui-sub-balancer/install.sh
 ```
+
+### ۳) آپگرید (سرور که الان 3x-ui دارد)
+
+```bash
+export GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxx
+bash /opt/3x-ui-sub-balancer/upgrade.sh
+```
+
+یا اگر پوشه را نداری:
+
+```bash
+export GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxx
+git clone https://x-access-token:${GITHUB_TOKEN}@github.com/sader21/3x-ui-sub-balancer.git /opt/3x-ui-sub-balancer
+bash /opt/3x-ui-sub-balancer/upgrade.sh
+```
+
+> **نکته:** با ریپوی private دیگر `curl raw.githubusercontent.com` کار نمی‌کند — حتماً `GITHUB_TOKEN` بده.
 
 ## استفاده در پنل
 
 1. **Xray → Outbounds → Subscriptions** → Add
-2. لینک ساب + **نام بالانسر** (مثلاً `sub1`) + بازه آپدیت
-3. **Refresh** بزنید
-4. **Xray → Routing** → Rule با `balancerTag` همان نام بالانسر
+2. لینک ساب + **نام بالانسر** + بازه آپدیت
+3. **Refresh**
+4. **Routing** → Rule با همان `balancerTag`
 5. در صورت نیاز **Restart Xray**
-
-| فیلد ساب | مثال |
-|----------|------|
-| نام بالانسر | `sub1` |
-| پیشوند تگ | `sub1-` (خودکار) |
-| بازه | `2` دقیقه |
-
-> نام بالانسر در ساب و Routing Rule باید **یکسان** باشد.
 
 ## نسخه پایه
 
-- Upstream: **3x-ui v3.3.0**
-- Override: `XUI_TAG=v3.3.1 ./upgrade.sh`
-
-## ساخت دستی روی سرور
-
-```bash
-git clone https://github.com/sader21/3x-ui-sub-balancer.git /opt/3x-ui-sub-balancer
-bash /opt/3x-ui-sub-balancer/panel-patch/build_on_server.sh
-```
-
-## ساختار ریپو
-
-```
-├── install.sh          # نصب کامل
-├── upgrade.sh          # آپگرید پچ
-└── panel-patch/
-    ├── apply_patch.py
-    ├── build_on_server.sh
-    ├── frontend/
-    ├── web/
-    └── xray/
-```
+Upstream: **3x-ui v3.3.0** — override: `XUI_TAG=v3.3.1 bash upgrade.sh`
 
 ## مجوز
 
-سورس پایه متعلق به [MHSanaei/3x-ui](https://github.com/MHSanaei/3x-ui) است.  
-پچ این ریپو روی همان مجوز upstream است.
+سورس پایه: [MHSanaei/3x-ui](https://github.com/MHSanaei/3x-ui)

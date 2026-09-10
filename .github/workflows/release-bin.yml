@@ -1,0 +1,95 @@
+name: Build and publish prebuilt panel
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "panel-patch/**"
+      - ".github/workflows/release-bin.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout patch repo
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.4"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Clone 3x-ui and apply patch
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch v3.3.0 https://github.com/MHSanaei/3x-ui.git /tmp/3x-ui-build
+          python3 panel-patch/apply_patch.py /tmp/3x-ui-build
+          # avoid forced toolchain download surprises
+          sed -i '/^toolchain /d' /tmp/3x-ui-build/go.mod || true
+
+      - name: Build frontend
+        working-directory: /tmp/3x-ui-build/frontend
+        run: |
+          npm ci
+          npm run gen:api
+          npx vite build
+
+      - name: Build panel binary
+        working-directory: /tmp/3x-ui-build
+        run: |
+          set -euo pipefail
+          export CGO_ENABLED=1
+          export GOTOOLCHAIN=local
+          go mod download
+          go build -ldflags "-w -s" -o /tmp/x-ui main.go
+          ls -lh /tmp/x-ui
+          strings /tmp/x-ui | grep -m1 UsesRuntimeSync
+
+      - name: Pack release asset
+        run: |
+          set -euo pipefail
+          ROOT=/tmp/pack
+          rm -rf "$ROOT"
+          mkdir -p "$ROOT/usr/local/x-ui/web"
+          cp /tmp/x-ui "$ROOT/usr/local/x-ui/x-ui"
+          chmod 755 "$ROOT/usr/local/x-ui/x-ui"
+          cp -a /tmp/3x-ui-build/web/dist "$ROOT/usr/local/x-ui/web/"
+          cp -a /tmp/3x-ui-build/web/translation "$ROOT/usr/local/x-ui/web/"
+          echo "panel-patch=sub-balancer" > "$ROOT/VERSION"
+          strings "$ROOT/usr/local/x-ui/x-ui" | grep -m1 UsesRuntimeSync > "$ROOT/PATCHED"
+          tar -C "$ROOT" -czf "$GITHUB_WORKSPACE/3x-ui-sub-balancer-linux-amd64.tar.gz" .
+          ls -lh "$GITHUB_WORKSPACE/3x-ui-sub-balancer-linux-amd64.tar.gz"
+          sha256sum "$GITHUB_WORKSPACE/3x-ui-sub-balancer-linux-amd64.tar.gz" | tee "$GITHUB_WORKSPACE/SHA256SUMS.txt"
+
+      - name: Publish to public bin repo release
+        env:
+          GH_TOKEN: ${{ secrets.PUBLIC_RELEASE_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="v$(date -u +%Y.%m.%d-%H%M)"
+          BODY="Prebuilt 3x-ui panel with subscription balancer patch. Does not include xray-core."
+          # create/update release on public install repo
+          gh release create "$TAG" \
+            --repo sader21/3x-ui-sub-balancer-bin \
+            --title "$TAG" \
+            --notes "$BODY" \
+            3x-ui-sub-balancer-linux-amd64.tar.gz \
+            SHA256SUMS.txt
+          # also retag as latest via deleting+creating or upload to a moving latest
+          if gh release view latest --repo sader21/3x-ui-sub-balancer-bin >/dev/null 2>&1; then
+            gh release delete latest --repo sader21/3x-ui-sub-balancer-bin --yes || true
+          fi
+          gh release create latest \
+            --repo sader21/3x-ui-sub-balancer-bin \
+            --title "latest" \
+            --notes "Latest prebuilt panel" \
+            3x-ui-sub-balancer-linux-amd64.tar.gz \
+            SHA256SUMS.txt

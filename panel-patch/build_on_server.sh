@@ -17,11 +17,13 @@ fi
 
 echo "==> Install build deps"
 export DEBIAN_FRONTEND=noninteractive
-if ! command -v node >/dev/null || [[ "$(node -v | cut -d. -f1 | tr -d v)" -lt 22 ]]; then
-  curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
-  apt-get install -y nodejs
+apt-get install -y -qq git rsync build-essential curl xz-utils >/dev/null 2>&1 || true
+
+if ! command -v node >/dev/null || [[ "$(node -v | cut -d. -f1 | tr -d v)" -lt 20 ]]; then
+  NODE_VER="v22.14.0"
+  curl -fsSL "https://nodejs.org/dist/${NODE_VER}/node-${NODE_VER}-linux-x64.tar.xz" -o /tmp/node.tar.xz
+  tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1
 fi
-apt-get install -y -qq git rsync build-essential curl >/dev/null 2>&1 || true
 
 if ! command -v go >/dev/null || [[ "$(go version | awk '{print $3}' | tr -d go | cut -d. -f1,2)" < "1.22" ]]; then
   GO_VER="1.24.2"

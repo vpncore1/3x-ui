@@ -26,8 +26,9 @@ if ! command -v node >/dev/null || [[ "$(node -v | cut -d. -f1 | tr -d v)" -lt 2
 fi
 
 if ! command -v go >/dev/null || [[ "$(go version | awk '{print $3}' | tr -d go | cut -d. -f1,2)" < "1.22" ]]; then
-  GO_VER="1.24.2"
-  curl -fsSL "https://go.dev/dl/go${GO_VER}.linux-amd64.tar.gz" -o /tmp/go.tgz
+  GO_VER="1.23.8"
+  curl -fsSL "https://mirrors.aliyun.com/golang/go${GO_VER}.linux-amd64.tar.gz" -o /tmp/go.tgz \
+    || curl -fsSL "https://go.dev/dl/go${GO_VER}.linux-amd64.tar.gz" -o /tmp/go.tgz
   rm -rf /usr/local/go
   tar -C /usr/local -xzf /tmp/go.tgz
   export PATH="/usr/local/go/bin:$PATH"

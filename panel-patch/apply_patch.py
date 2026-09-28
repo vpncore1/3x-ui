@@ -253,6 +253,11 @@ func (a *XraySettingController) afterOutboundSubChange(subID int) {
 		a.XrayService.SetToNeedRestart()
 		return
 	}
+	if !sub.Enabled {
+		_ = a.OutboundSubscriptionService.RemoveRuntimeOutbounds(sub, a.XrayService.GetXrayAPIPort())
+		a.XrayService.SetToNeedRestart()
+		return
+	}
 	// Always write outbounds into the xray template so they appear under Outbounds.
 	if err := a.OutboundSubscriptionService.ApplyRuntimeSync(sub, a.XrayService.GetXrayAPIPort()); err != nil {
 		logger.Warningf("outbound sub %d sync failed: %v", subID, err)
@@ -304,6 +309,7 @@ func (a *XraySettingController) updateOutboundSub(c *gin.Context) {
 		jsonMsg(c, "Invalid id", err)
 		return
 	}
+	before, _ := a.OutboundSubscriptionService.Get(subID)
 	remark := c.PostForm("remark")
 	rawURL := c.PostForm("url")
 	prefix := c.PostForm("tagPrefix")
@@ -319,8 +325,14 @@ func (a *XraySettingController) updateOutboundSub(c *gin.Context) {
 		jsonMsg(c, "Failed to update outbound subscription", err)
 		return
 	}
-	if _, err := a.OutboundSubscriptionService.Refresh(subID); err != nil {
-		logger.Warningf("outbound sub %d refresh on update: %v", subID, err)
+	// Balancer name removed: drop the old balancer from the template.
+	if before != nil && strings.TrimSpace(before.BalancerTag) != "" && strings.TrimSpace(bt) == "" {
+		_ = a.OutboundSubscriptionService.RemoveBalancerOnly(before.BalancerTag)
+	}
+	if enabled {
+		if _, err := a.OutboundSubscriptionService.Refresh(subID); err != nil {
+			logger.Warningf("outbound sub %d refresh on update: %v", subID, err)
+		}
 	}
 	a.afterOutboundSubChange(subID)
 	jsonObj(c, "", nil)

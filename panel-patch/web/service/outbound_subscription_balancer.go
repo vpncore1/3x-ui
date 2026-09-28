@@ -120,7 +120,18 @@ func selectorFromOutboundTags(outboundTags []string) []any {
 
 func replacePrefixedOutbounds(existing []any, prefix string, desired []map[string]any, prepend bool) []any {
 	prefix = strings.TrimSpace(prefix)
+	// Prefer "foo-" style so "m-server" does not also wipe "m-server2-...".
+	match := prefix
+	if match != "" && !strings.HasSuffix(match, "-") {
+		match = match + "-"
+	}
 	kept := make([]any, 0, len(existing))
+	desiredSet := map[string]bool{}
+	for _, d := range desired {
+		if dt, _ := d["tag"].(string); dt != "" {
+			desiredSet[dt] = true
+		}
+	}
 	for _, item := range existing {
 		m, ok := item.(map[string]any)
 		if !ok {
@@ -128,18 +139,10 @@ func replacePrefixedOutbounds(existing []any, prefix string, desired []map[strin
 			continue
 		}
 		tag, _ := m["tag"].(string)
-		if prefix != "" && strings.HasPrefix(tag, prefix) {
+		if match != "" && strings.HasPrefix(tag, match) {
 			continue
 		}
-		// Also drop exact desired tags (handles prefix changes).
-		drop := false
-		for _, d := range desired {
-			if dt, _ := d["tag"].(string); dt != "" && dt == tag {
-				drop = true
-				break
-			}
-		}
-		if drop {
+		if desiredSet[tag] {
 			continue
 		}
 		kept = append(kept, item)
@@ -190,9 +193,9 @@ func syncSubscriptionIntoTemplate(settingSvc *SettingService, balancerTag, tagPr
 	if prefix == "" && strings.TrimSpace(balancerTag) != "" {
 		prefix = strings.TrimSpace(balancerTag) + "-"
 	}
-	matchPrefix := strings.TrimSuffix(prefix, "-")
-	if matchPrefix == "" && len(outboundTags) > 0 {
-		matchPrefix = outboundTags[0]
+	matchPrefix := strings.TrimSpace(prefix)
+	if matchPrefix != "" && !strings.HasSuffix(matchPrefix, "-") {
+		matchPrefix = matchPrefix + "-"
 	}
 
 	outbounds, _ := cfg["outbounds"].([]any)
@@ -284,8 +287,12 @@ func outboundListsEqual(a, b []any) bool {
 
 // removePrefixedOutboundsFromTemplate drops outbounds matching prefix (used on delete).
 func removePrefixedOutboundsFromTemplate(settingSvc *SettingService, prefix, balancerTag string) error {
-	prefix = strings.TrimSuffix(strings.TrimSpace(prefix), "-")
-	if prefix == "" && strings.TrimSpace(balancerTag) == "" {
+	prefix = strings.TrimSpace(prefix)
+	match := prefix
+	if match != "" && !strings.HasSuffix(match, "-") {
+		match = match + "-"
+	}
+	if match == "" && strings.TrimSpace(balancerTag) == "" {
 		return nil
 	}
 
@@ -300,7 +307,7 @@ func removePrefixedOutboundsFromTemplate(settingSvc *SettingService, prefix, bal
 	}
 
 	changed := false
-	if outbounds, ok := cfg["outbounds"].([]any); ok && prefix != "" {
+	if outbounds, ok := cfg["outbounds"].([]any); ok && match != "" {
 		kept := make([]any, 0, len(outbounds))
 		for _, item := range outbounds {
 			m, ok := item.(map[string]any)
@@ -309,7 +316,7 @@ func removePrefixedOutboundsFromTemplate(settingSvc *SettingService, prefix, bal
 				continue
 			}
 			tag, _ := m["tag"].(string)
-			if strings.HasPrefix(tag, prefix) {
+			if strings.HasPrefix(tag, match) {
 				changed = true
 				continue
 			}
@@ -344,4 +351,13 @@ func removePrefixedOutboundsFromTemplate(settingSvc *SettingService, prefix, bal
 	}
 	xraySetting := &XraySettingService{SettingService: *settingSvc}
 	return xraySetting.SaveXraySetting(string(out))
+}
+
+// removeBalancerOnlyFromTemplate removes a balancer by tag without touching outbounds.
+func removeBalancerOnlyFromTemplate(settingSvc *SettingService, balancerTag string) error {
+	balancerTag = strings.TrimSpace(balancerTag)
+	if balancerTag == "" {
+		return nil
+	}
+	return removePrefixedOutboundsFromTemplate(settingSvc, "", balancerTag)
 }

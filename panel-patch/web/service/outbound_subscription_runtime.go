@@ -138,12 +138,15 @@ func (s *OutboundSubscriptionService) ApplyRuntimeSync(sub *model.OutboundSubscr
 		desiredTags[tag] = ob
 	}
 
-	matchPrefix := strings.TrimSuffix(prefix, "-")
+	matchPrefix := strings.TrimSpace(prefix)
+	if matchPrefix != "" && !strings.HasSuffix(matchPrefix, "-") {
+		matchPrefix = matchPrefix + "-"
+	}
 	for _, tag := range existing {
 		if matchPrefix != "" && !strings.HasPrefix(tag, matchPrefix) {
 			continue
 		}
-		if matchPrefix == "" && !strings.HasPrefix(tag, prefix) {
+		if matchPrefix == "" {
 			continue
 		}
 		if _, ok := desiredTags[tag]; !ok {
@@ -192,7 +195,10 @@ func (s *OutboundSubscriptionService) RemoveRuntimeOutbounds(sub *model.Outbound
 	if err != nil {
 		return err
 	}
-	matchPrefix := strings.TrimSuffix(prefix, "-")
+	matchPrefix := strings.TrimSpace(prefix)
+	if matchPrefix != "" && !strings.HasSuffix(matchPrefix, "-") {
+		matchPrefix = matchPrefix + "-"
+	}
 	for _, tag := range tags {
 		if matchPrefix != "" && strings.HasPrefix(tag, matchPrefix) {
 			if err := api.RemoveOutbound(tag); err != nil {
@@ -201,6 +207,11 @@ func (s *OutboundSubscriptionService) RemoveRuntimeOutbounds(sub *model.Outbound
 		}
 	}
 	return nil
+}
+
+// RemoveBalancerOnly drops a balancer entry from the xray template (outbounds untouched).
+func (s *OutboundSubscriptionService) RemoveBalancerOnly(balancerTag string) error {
+	return removeBalancerOnlyFromTemplate(&s.settingService, balancerTag)
 }
 
 // SyncAllRuntime applies runtime sync for enabled subscriptions with a balancer name.

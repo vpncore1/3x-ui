@@ -1,15 +1,15 @@
-package service
+﻿package service
 
 import (
 	"encoding/json"
 	"fmt"
 	"strings"
 
-	"github.com/mhsanaei/3x-ui/v3/database"
-	"github.com/mhsanaei/3x-ui/v3/database/model"
-	"github.com/mhsanaei/3x-ui/v3/logger"
-	"github.com/mhsanaei/3x-ui/v3/util/common"
-	"github.com/mhsanaei/3x-ui/v3/xray"
+	"github.com/mhsanaei/3x-ui/v2/database"
+	"github.com/mhsanaei/3x-ui/v2/database/model"
+	"github.com/mhsanaei/3x-ui/v2/logger"
+	"github.com/mhsanaei/3x-ui/v2/util/common"
+	"github.com/mhsanaei/3x-ui/v2/xray"
 )
 
 // UsesRuntimeSync is true when this subscription manages its own balancer pool via gRPC.
@@ -37,7 +37,7 @@ func effectiveBalancerStrategy(sub *model.OutboundSubscription) string {
 }
 
 // ApplyRuntimeSync fetches subscription outbounds into xray and updates the balancer pool.
-// Routing rules are not touched — configure them manually in the panel.
+// Routing rules are not touched â€” configure them manually in the panel.
 func (s *OutboundSubscriptionService) ApplyRuntimeSync(sub *model.OutboundSubscription, apiPort int) error {
 	if !UsesRuntimeSync(sub) {
 		return nil
@@ -82,7 +82,8 @@ func (s *OutboundSubscriptionService) ApplyRuntimeSync(sub *model.OutboundSubscr
 
 	existing, err := api.ListOutboundTags()
 	if err != nil {
-		return err
+		logger.Warningf("outbound sub %d: ListOutboundTags: %v (continuing with desired tags only)", sub.Id, err)
+		existing = nil
 	}
 
 	desiredTags := map[string]map[string]any{}
@@ -166,3 +167,4 @@ func (s *OutboundSubscriptionService) SyncAllRuntime(apiPort int) bool {
 	}
 	return needRestart
 }
+

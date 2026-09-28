@@ -1,10 +1,37 @@
-package service
+﻿package service
 
 import (
 	"encoding/json"
 	"fmt"
 	"strings"
 )
+
+// UnwrapXrayTemplateConfig peels accidental nested {"xraySetting": ...} wrappers.
+func UnwrapXrayTemplateConfig(raw string) string {
+	const maxDepth = 8
+	for range maxDepth {
+		var top map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(raw), &top); err != nil {
+			return raw
+		}
+		inner, ok := top["xraySetting"]
+		if !ok {
+			return raw
+		}
+		for _, k := range []string{"inbounds", "outbounds", "routing", "api", "dns", "log", "policy", "stats"} {
+			if _, hit := top[k]; hit {
+				return raw
+			}
+		}
+		unwrapped := string(inner)
+		var asStr string
+		if err := json.Unmarshal(inner, &asStr); err == nil {
+			unwrapped = asStr
+		}
+		raw = unwrapped
+	}
+	return raw
+}
 
 func selectorFromTags(outboundTags []string) []any {
 	sel := make([]any, 0, len(outboundTags))
@@ -166,3 +193,4 @@ func ensureBalancerInTemplate(settingSvc *SettingService, balancerTag string, ou
 	xraySetting := &XraySettingService{SettingService: *settingSvc}
 	return xraySetting.SaveXraySetting(string(out))
 }
+

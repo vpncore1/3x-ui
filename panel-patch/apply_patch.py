@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Apply panel-patch overlay onto a 3x-ui source tree."""
+"""Apply panel-patch overlay onto a 3x-ui v2.9.0 source tree.
+
+Backports Outbound Subscriptions from v3.3.0 + balancer/runtime sync.
+"""
 
 from __future__ import annotations
 
@@ -14,176 +17,195 @@ PATCH = Path(__file__).resolve().parent
 
 
 def copy_overlay() -> None:
-    for rel in ("xray/outbound_runtime.go",):
-        src = PATCH / rel
-        dst = ROOT / rel
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(src, dst)
-    for rel in (
+    files = [
+        "util/link/outbound.go",
+        "web/service/outbound_subscription.go",
         "web/service/outbound_subscription_runtime.go",
         "web/service/outbound_subscription_balancer.go",
-    ):
+        "web/service/url_safety.go",
+        "web/job/outbound_subscription_job.go",
+        "xray/outbound_runtime.go",
+    ]
+    for rel in files:
         src = PATCH / rel
         dst = ROOT / rel
-        shutil.copy2(src, dst)
-    frontend_src = PATCH / "frontend" / "OutboundsTab.tsx"
-    if frontend_src.exists():
-        dst = ROOT / "frontend/src/pages/xray/outbounds/OutboundsTab.tsx"
         dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(frontend_src, dst)
+        shutil.copy2(src, dst)
 
 
 def patch_api_go() -> None:
     path = ROOT / "xray/api.go"
     text = path.read_text(encoding="utf-8")
-    if "RoutingServiceClient" not in text:
-        text = text.replace(
-            '\t"github.com/xtls/xray-core/app/proxyman/command"\n',
-            '\t"github.com/xtls/xray-core/app/proxyman/command"\n'
-            '\trouterCommand "github.com/xtls/xray-core/app/router/command"\n',
-        )
-        text = text.replace(
-            "\tHandlerServiceClient *command.HandlerServiceClient\n",
-            "\tHandlerServiceClient  *command.HandlerServiceClient\n"
-            "\tRoutingServiceClient  *routerCommand.RoutingServiceClient\n",
-        )
-        text = text.replace(
-            "\tx.HandlerServiceClient = &hsClient\n",
-            "\tx.HandlerServiceClient = &hsClient\n\n"
-            "\trClient := routerCommand.NewRoutingServiceClient(conn)\n"
-            "\tx.RoutingServiceClient = &rClient\n",
-        )
-        text = text.replace(
-            "\tx.HandlerServiceClient = nil\n",
-            "\tx.HandlerServiceClient = nil\n"
-            "\tx.RoutingServiceClient = nil\n",
-        )
-        path.write_text(text, encoding="utf-8")
+    if "RoutingServiceClient" in text:
+        return
+    text = text.replace(
+        '\t"github.com/xtls/xray-core/app/proxyman/command"\n',
+        '\t"github.com/xtls/xray-core/app/proxyman/command"\n'
+        '\trouterCommand "github.com/xtls/xray-core/app/router/command"\n',
+    )
+    text = text.replace(
+        "\tHandlerServiceClient *command.HandlerServiceClient\n",
+        "\tHandlerServiceClient  *command.HandlerServiceClient\n"
+        "\tRoutingServiceClient  *routerCommand.RoutingServiceClient\n",
+    )
+    text = text.replace(
+        "\tx.HandlerServiceClient = &hsClient\n",
+        "\tx.HandlerServiceClient = &hsClient\n\n"
+        "\trClient := routerCommand.NewRoutingServiceClient(conn)\n"
+        "\tx.RoutingServiceClient = &rClient\n",
+    )
+    text = text.replace(
+        "\tx.HandlerServiceClient = nil\n",
+        "\tx.HandlerServiceClient = nil\n"
+        "\tx.RoutingServiceClient = nil\n",
+    )
+    path.write_text(text, encoding="utf-8")
 
 
 def patch_model() -> None:
     path = ROOT / "database/model/model.go"
     text = path.read_text(encoding="utf-8")
-    if "BalancerTag" in text:
+    if "type OutboundSubscription struct" in text:
+        if "BalancerTag" not in text:
+            raise RuntimeError("OutboundSubscription exists without BalancerTag")
         return
-    extra = (
-        '\tBalancerTag       string `json:"balancerTag" form:"balancerTag"`\n'
-        '\tTargetInboundTag  string `json:"targetInboundTag" form:"targetInboundTag"`\n'
-        '\tBalancerStrategy  string `json:"balancerStrategy" form:"balancerStrategy" gorm:"default:roundRobin"`\n'
-        '\tFallbackTag       string `json:"fallbackTag" form:"fallbackTag"`\n'
-    )
-    text, n = re.subn(
-        r'(\tTagPrefix\s+string `json:"tagPrefix" form:"tagPrefix"`\n)',
-        r"\1" + extra,
-        text,
-        count=1,
-    )
-    if n != 1:
-        raise RuntimeError("patch_model: TagPrefix anchor not found")
-    path.write_text(text, encoding="utf-8")
-
-
-def patch_outbound_subscription_service() -> None:
-    path = ROOT / "web/service/outbound_subscription.go"
-    text = path.read_text(encoding="utf-8")
-
-    old_create = (
-        "func (s *OutboundSubscriptionService) Create(remark, rawURL, tagPrefix string, enabled bool, updateInterval int, allowPrivate, prepend bool) (*model.OutboundSubscription, error) {"
-    )
-    new_create = (
-        "func (s *OutboundSubscriptionService) Create(remark, rawURL, tagPrefix string, enabled bool, updateInterval int, allowPrivate, prepend bool, balancerTag, targetInboundTag, balancerStrategy, fallbackTag string) (*model.OutboundSubscription, error) {"
-    )
-    text = text.replace(old_create, new_create)
-
-    old_update = (
-        "func (s *OutboundSubscriptionService) Update(id int, remark, rawURL, tagPrefix string, enabled bool, updateInterval int, allowPrivate, prepend bool) error {"
-    )
-    new_update = (
-        "func (s *OutboundSubscriptionService) Update(id int, remark, rawURL, tagPrefix string, enabled bool, updateInterval int, allowPrivate, prepend bool, balancerTag, targetInboundTag, balancerStrategy, fallbackTag string) error {"
-    )
-    text = text.replace(old_update, new_update)
-
-    if "applyBalancerFields" not in text:
-        helper = '''
-
-func applyBalancerFields(sub *model.OutboundSubscription, balancerTag, targetInboundTag, balancerStrategy, fallbackTag, tagPrefix string) {
-	sub.BalancerTag = strings.TrimSpace(balancerTag)
-	sub.TargetInboundTag = strings.TrimSpace(targetInboundTag)
-	sub.BalancerStrategy = strings.TrimSpace(balancerStrategy)
-	if sub.BalancerStrategy == "" {
-		sub.BalancerStrategy = "roundRobin"
-	}
-	sub.FallbackTag = strings.TrimSpace(fallbackTag)
-	prefix := strings.TrimSpace(tagPrefix)
-	if prefix == "" && sub.BalancerTag != "" {
-		prefix = sub.BalancerTag + "-"
-	}
-	sub.TagPrefix = prefix
+    block = '''
+// OutboundSubscription stores a remote subscription URL whose outbounds are
+// merged into the Xray config (with optional named balancer + runtime sync).
+type OutboundSubscription struct {
+	Id                   int    `json:"id" form:"id" gorm:"primaryKey;autoIncrement"`
+	Remark               string `json:"remark" form:"remark"`
+	Url                  string `json:"url" form:"url"`
+	Enabled              bool   `json:"enabled" form:"enabled" gorm:"default:true"`
+	AllowPrivate         bool   `json:"allowPrivate" form:"allowPrivate" gorm:"default:false"`
+	TagPrefix            string `json:"tagPrefix" form:"tagPrefix"`
+	BalancerTag          string `json:"balancerTag" form:"balancerTag"`
+	TargetInboundTag     string `json:"targetInboundTag" form:"targetInboundTag"`
+	BalancerStrategy     string `json:"balancerStrategy" form:"balancerStrategy" gorm:"default:roundRobin"`
+	FallbackTag          string `json:"fallbackTag" form:"fallbackTag"`
+	UpdateInterval       int    `json:"updateInterval" form:"updateInterval" gorm:"default:600"`
+	Priority             int    `json:"priority" form:"priority" gorm:"default:0"`
+	Prepend              bool   `json:"prepend" form:"prepend" gorm:"default:false"`
+	LastUpdated          int64  `json:"lastUpdated" form:"lastUpdated"`
+	LastError            string `json:"lastError" form:"lastError"`
+	LastFetchedOutbounds string `json:"lastFetchedOutbounds" form:"lastFetchedOutbounds" gorm:"type:text"`
+	LinkIdentities       string `json:"-" gorm:"type:text;column:link_identities"`
+	CreatedAt            int64  `json:"createdAt" gorm:"autoCreateTime:milli"`
+	UpdatedAt            int64  `json:"updatedAt" gorm:"autoUpdateTime:milli"`
+	OutboundCount        int    `json:"outboundCount" gorm:"-"`
 }
 '''
+    # Append before end of file
+    text = text.rstrip() + "\n" + block + "\n"
+    path.write_text(text, encoding="utf-8")
+
+
+def patch_db() -> None:
+    path = ROOT / "database/db.go"
+    text = path.read_text(encoding="utf-8")
+    if "OutboundSubscription{}" in text:
+        return
+    text = text.replace(
+        "\t\t&model.CustomGeoResource{},\n",
+        "\t\t&model.CustomGeoResource{},\n"
+        "\t\t&model.OutboundSubscription{},\n",
+    )
+    if "OutboundSubscription{}" not in text:
         text = text.replace(
-            "func (s *OutboundSubscriptionService) recordError(sub *model.OutboundSubscription, err error) {",
-            helper + "\nfunc (s *OutboundSubscriptionService) recordError(sub *model.OutboundSubscription, err error) {",
+            "\t\t&model.HistoryOfSeeders{},\n",
+            "\t\t&model.HistoryOfSeeders{},\n"
+            "\t\t&model.OutboundSubscription{},\n",
         )
+    path.write_text(text, encoding="utf-8")
 
-    # Create body: after prefix assignment, apply balancer fields
-    text = text.replace(
-        "\tsub := &model.OutboundSubscription{\n"
-        "\t\tRemark:         strings.TrimSpace(remark),\n"
-        "\t\tUrl:            cleanURL,\n"
-        "\t\tEnabled:        enabled,\n"
-        "\t\tAllowPrivate:   allowPrivate,\n"
-        "\t\tPrepend:        prepend,\n"
-        "\t\tPriority:       int(count),\n"
-        "\t\tTagPrefix:      prefix,\n"
-        "\t\tUpdateInterval: updateInterval,\n"
-        "\t}",
-        "\tsub := &model.OutboundSubscription{\n"
-        "\t\tRemark:         strings.TrimSpace(remark),\n"
-        "\t\tUrl:            cleanURL,\n"
-        "\t\tEnabled:        enabled,\n"
-        "\t\tAllowPrivate:   allowPrivate,\n"
-        "\t\tPrepend:        prepend,\n"
-        "\t\tPriority:       int(count),\n"
-        "\t\tTagPrefix:      prefix,\n"
-        "\t\tUpdateInterval: updateInterval,\n"
-        "\t}\n"
-        "\tapplyBalancerFields(sub, balancerTag, targetInboundTag, balancerStrategy, fallbackTag, prefix)",
-    )
 
-    text = text.replace(
-        "\tsub.TagPrefix = prefix\n"
-        "\tsub.UpdateInterval = updateInterval\n"
-        "\treturn database.GetDB().Save(sub).Error",
-        "\tapplyBalancerFields(sub, balancerTag, targetInboundTag, balancerStrategy, fallbackTag, prefix)\n"
-        "\tsub.UpdateInterval = updateInterval\n"
-        "\treturn database.GetDB().Save(sub).Error",
-    )
+def patch_xray_service() -> None:
+    path = ROOT / "web/service/xray.go"
+    text = path.read_text(encoding="utf-8")
+
+    if "GetXrayAPIPort" not in text:
+        text = text.rstrip() + """
+
+// GetXrayAPIPort returns the local xray gRPC API port, or 0 if not running.
+func (s *XrayService) GetXrayAPIPort() int {
+	if p == nil || !p.IsRunning() {
+		return 0
+	}
+	return p.GetAPIPort()
+}
+"""
+
+    if "mergeSubscriptionOutbounds" not in text:
+        if '"encoding/json"' not in text:
+            text = text.replace(
+                "import (\n",
+                'import (\n\t"encoding/json"\n',
+                1,
+            )
+        if "json_util" not in text:
+            text = text.replace(
+                '"github.com/mhsanaei/3x-ui/v2/xray"\n',
+                '"github.com/mhsanaei/3x-ui/v2/util/json_util"\n'
+                '\t"github.com/mhsanaei/3x-ui/v2/xray"\n',
+            )
+        merge_fn = '''
+// mergeSubscriptionOutbounds injects subscription outbounds around template outbounds.
+func mergeSubscriptionOutbounds(cfg *xray.Config, prepend, appendList []any) {
+	if len(prepend) == 0 && len(appendList) == 0 {
+		return
+	}
+	var templateOutbounds []any
+	if len(cfg.OutboundConfigs) > 0 {
+		if err := json.Unmarshal(cfg.OutboundConfigs, &templateOutbounds); err != nil {
+			return
+		}
+	}
+	merged := make([]any, 0, len(prepend)+len(templateOutbounds)+len(appendList))
+	merged = append(merged, prepend...)
+	merged = append(merged, templateOutbounds...)
+	merged = append(merged, appendList...)
+	combined, err := json.MarshalIndent(merged, "", "  ")
+	if err != nil {
+		return
+	}
+	cfg.OutboundConfigs = json_util.RawMessage(combined)
+}
+'''
+        text = text.rstrip() + "\n" + merge_fn + "\n"
+
+        # Inject merge call before final return of GetXrayConfig
+        old = "\t\tinboundConfig := inbound.GenXrayInboundConfig()\n\t\txrayConfig.InboundConfigs = append(xrayConfig.InboundConfigs, *inboundConfig)\n\t}\n\treturn xrayConfig, nil\n}"
+        new = (
+            "\t\tinboundConfig := inbound.GenXrayInboundConfig()\n"
+            "\t\txrayConfig.InboundConfigs = append(xrayConfig.InboundConfigs, *inboundConfig)\n"
+            "\t}\n\n"
+            "\tsubSvc := &OutboundSubscriptionService{}\n"
+            "\tif prepend, appendList, err := subSvc.activeOutboundsSplit(); err == nil && (len(prepend) > 0 || len(appendList) > 0) {\n"
+            "\t\tmergeSubscriptionOutbounds(xrayConfig, prepend, appendList)\n"
+            "\t}\n\n"
+            "\treturn xrayConfig, nil\n}"
+        )
+        if old not in text:
+            raise RuntimeError("patch_xray_service: GetXrayConfig return anchor not found")
+        text = text.replace(old, new, 1)
 
     path.write_text(text, encoding="utf-8")
 
 
-def reset_git_files() -> None:
-    if not (ROOT / ".git").exists():
-        return
-    rels = [
-        "database/model/model.go",
-        "web/controller/xray_setting.go",
-        "web/service/outbound_subscription.go",
-        "web/job/outbound_subscription_job.go",
-        "xray/api.go",
-        "frontend/src/pages/xray/outbounds/OutboundsTab.tsx",
-        "web/translation/en-US.json",
-        "web/translation/fa-IR.json",
-    ]
-    subprocess.run(["git", "checkout", "--", *rels], cwd=ROOT, check=False)
-
-
-def patch_controller() -> None:
-    path = ROOT / "web/controller/xray_setting.go"
+def patch_web_cron() -> None:
+    path = ROOT / "web/web.go"
     text = path.read_text(encoding="utf-8")
+    if "NewOutboundSubscriptionJob" in text:
+        return
+    text = text.replace(
+        '\ts.cron.AddJob("@every 10s", job.NewCheckClientIpJob())\n',
+        '\ts.cron.AddJob("@every 10s", job.NewCheckClientIpJob())\n'
+        '\ts.cron.AddJob("@every 1m", job.NewOutboundSubscriptionJob())\n',
+    )
+    path.write_text(text, encoding="utf-8")
 
-    helper = '''
+
+CONTROLLER_HANDLERS = r'''
 func parseBalancerSubFields(c *gin.Context) (balancerTag, targetInboundTag, balancerStrategy, fallbackTag string) {
 	balancerTag = strings.TrimSpace(c.PostForm("balancerTag"))
 	targetInboundTag = strings.TrimSpace(c.PostForm("targetInboundTag"))
@@ -195,16 +217,7 @@ func parseBalancerSubFields(c *gin.Context) (balancerTag, targetInboundTag, bala
 	return
 }
 
-func (a *XraySettingController) afterOutboundSubChange(subID int, removed bool) {
-	if removed {
-		sub, err := a.OutboundSubscriptionService.Get(subID)
-		if err == nil && service.UsesRuntimeSync(sub) {
-			_ = a.OutboundSubscriptionService.RemoveRuntimeOutbounds(sub, a.XrayService.GetXrayAPIPort())
-			return
-		}
-		a.XrayService.SetToNeedRestart()
-		return
-	}
+func (a *XraySettingController) afterOutboundSubChange(subID int) {
 	sub, err := a.OutboundSubscriptionService.Get(subID)
 	if err != nil {
 		a.XrayService.SetToNeedRestart()
@@ -219,58 +232,67 @@ func (a *XraySettingController) afterOutboundSubChange(subID int, removed bool) 
 		a.XrayService.SetToNeedRestart()
 	}
 }
-'''
-    if "parseBalancerSubFields" not in text:
-        if '"github.com/mhsanaei/3x-ui/v3/logger"' not in text:
-            text = text.replace(
-                '"github.com/mhsanaei/3x-ui/v3/util/common"\n',
-                '"github.com/mhsanaei/3x-ui/v3/logger"\n'
-                '\t"github.com/mhsanaei/3x-ui/v3/util/common"\n',
-            )
-        if '"strings"' not in text:
-            text = text.replace('"strconv"\n', '"strconv"\n\t"strings"\n')
-        text = text.replace(
-            "func parseIntSafe(s string) (int, error) {",
-            helper + "\nfunc parseIntSafe(s string) (int, error) {",
-        )
 
-    text = text.replace(
-        '\tsub, err := a.OutboundSubscriptionService.Create(remark, rawURL, prefix, enabled, interval, allowPrivate, prepend)',
-        '\tbt, tit, bs, fb := parseBalancerSubFields(c)\n'
-        '\tsub, err := a.OutboundSubscriptionService.Create(remark, rawURL, prefix, enabled, interval, allowPrivate, prepend, bt, tit, bs, fb)',
-    )
-    text = text.replace(
-        '\tif err := a.OutboundSubscriptionService.Update(subID, remark, rawURL, prefix, enabled, interval, allowPrivate, prepend); err != nil {',
-        '\tbt, tit, bs, fb := parseBalancerSubFields(c)\n'
-        '\tif err := a.OutboundSubscriptionService.Update(subID, remark, rawURL, prefix, enabled, interval, allowPrivate, prepend, bt, tit, bs, fb); err != nil {',
-    )
-    text = text.replace(
-        '\t\tjsonMsg(c, "Failed to update outbound subscription", err)\n'
-        '\t\treturn\n'
-        '\t}\n'
-        '\tjsonObj(c, "", nil)',
-        '\t\tjsonMsg(c, "Failed to update outbound subscription", err)\n'
-        '\t\treturn\n'
-        '\t}\n'
-        '\ta.afterOutboundSubChange(subID, false)\n'
-        '\tjsonObj(c, "", nil)',
-    )
-    delete_old = '''func (a *XraySettingController) deleteOutboundSub(c *gin.Context) {
+func (a *XraySettingController) listOutboundSubs(c *gin.Context) {
+	list, err := a.OutboundSubscriptionService.List()
+	if err != nil {
+		jsonMsg(c, "Failed to list outbound subscriptions", err)
+		return
+	}
+	jsonObj(c, list, nil)
+}
+
+func (a *XraySettingController) createOutboundSub(c *gin.Context) {
+	remark := c.PostForm("remark")
+	rawURL := c.PostForm("url")
+	prefix := c.PostForm("tagPrefix")
+	enabled := c.PostForm("enabled") != "false"
+	allowPrivate := c.PostForm("allowPrivate") == "true"
+	prepend := c.PostForm("prepend") == "true"
+	interval, _ := strconv.Atoi(c.PostForm("updateInterval"))
+	if interval <= 0 {
+		interval = 600
+	}
+	bt, tit, bs, fb := parseBalancerSubFields(c)
+	sub, err := a.OutboundSubscriptionService.Create(remark, rawURL, prefix, enabled, interval, allowPrivate, prepend, bt, tit, bs, fb)
+	if err != nil {
+		jsonMsg(c, "Failed to create outbound subscription", err)
+		return
+	}
+	if _, err := a.OutboundSubscriptionService.Refresh(sub.Id); err != nil {
+		logger.Warningf("outbound sub %d initial refresh: %v", sub.Id, err)
+	}
+	a.afterOutboundSubChange(sub.Id)
+	jsonObj(c, sub, nil)
+}
+
+func (a *XraySettingController) updateOutboundSub(c *gin.Context) {
 	id := c.Param("id")
 	var subID int
 	if _, err := fmt.Sscanf(id, "%d", &subID); err != nil {
 		jsonMsg(c, "Invalid id", err)
 		return
 	}
-	if err := a.OutboundSubscriptionService.Delete(subID); err != nil {
-		jsonMsg(c, "Failed to delete outbound subscription", err)
+	remark := c.PostForm("remark")
+	rawURL := c.PostForm("url")
+	prefix := c.PostForm("tagPrefix")
+	enabled := c.PostForm("enabled") != "false"
+	allowPrivate := c.PostForm("allowPrivate") == "true"
+	prepend := c.PostForm("prepend") == "true"
+	interval, _ := strconv.Atoi(c.PostForm("updateInterval"))
+	if interval <= 0 {
+		interval = 600
+	}
+	bt, tit, bs, fb := parseBalancerSubFields(c)
+	if err := a.OutboundSubscriptionService.Update(subID, remark, rawURL, prefix, enabled, interval, allowPrivate, prepend, bt, tit, bs, fb); err != nil {
+		jsonMsg(c, "Failed to update outbound subscription", err)
 		return
 	}
-	// Signal that xray should drop this subscription's outbounds on next reload.
-	a.XrayService.SetToNeedRestart()
+	a.afterOutboundSubChange(subID)
 	jsonObj(c, "", nil)
-}'''
-    delete_new = '''func (a *XraySettingController) deleteOutboundSub(c *gin.Context) {
+}
+
+func (a *XraySettingController) deleteOutboundSub(c *gin.Context) {
 	id := c.Param("id")
 	var subID int
 	if _, err := fmt.Sscanf(id, "%d", &subID); err != nil {
@@ -288,11 +310,9 @@ func (a *XraySettingController) afterOutboundSubChange(subID int, removed bool) 
 		a.XrayService.SetToNeedRestart()
 	}
 	jsonObj(c, "", nil)
-}'''
-    if delete_old in text:
-        text = text.replace(delete_old, delete_new)
+}
 
-    refresh_old = '''func (a *XraySettingController) refreshOutboundSub(c *gin.Context) {
+func (a *XraySettingController) refreshOutboundSub(c *gin.Context) {
 	id := c.Param("id")
 	var subID int
 	if _, err := fmt.Sscanf(id, "%d", &subID); err != nil {
@@ -304,45 +324,11 @@ func (a *XraySettingController) afterOutboundSubChange(subID int, removed bool) 
 		jsonMsg(c, "Refresh failed", err)
 		return
 	}
-	// Signal that xray should pick up the new outbounds on next restart/reload
-	a.XrayService.SetToNeedRestart()
+	a.afterOutboundSubChange(subID)
 	jsonObj(c, obs, nil)
-}'''
-    refresh_new = '''func (a *XraySettingController) refreshOutboundSub(c *gin.Context) {
-	id := c.Param("id")
-	var subID int
-	if _, err := fmt.Sscanf(id, "%d", &subID); err != nil {
-		jsonMsg(c, "Invalid id", err)
-		return
-	}
-	obs, err := a.OutboundSubscriptionService.Refresh(subID)
-	if err != nil {
-		jsonMsg(c, "Refresh failed", err)
-		return
-	}
-	a.afterOutboundSubChange(subID, false)
-	jsonObj(c, obs, nil)
-}'''
-    if refresh_old in text:
-        text = text.replace(refresh_old, refresh_new)
+}
 
-    move_old = '''func (a *XraySettingController) moveOutboundSub(c *gin.Context) {
-	id := c.Param("id")
-	var subID int
-	if _, err := fmt.Sscanf(id, "%d", &subID); err != nil {
-		jsonMsg(c, "Invalid id", err)
-		return
-	}
-	up := c.PostForm("dir") == "up"
-	if err := a.OutboundSubscriptionService.Move(subID, up); err != nil {
-		jsonMsg(c, "Failed to reorder outbound subscription", err)
-		return
-	}
-	// Order affects the merged outbounds, so xray needs a reload.
-	a.XrayService.SetToNeedRestart()
-	jsonObj(c, "", nil)
-}'''
-    move_new = '''func (a *XraySettingController) moveOutboundSub(c *gin.Context) {
+func (a *XraySettingController) moveOutboundSub(c *gin.Context) {
 	id := c.Param("id")
 	var subID int
 	if _, err := fmt.Sscanf(id, "%d", &subID); err != nil {
@@ -359,219 +345,389 @@ func (a *XraySettingController) afterOutboundSubChange(subID int, removed bool) 
 		a.XrayService.SetToNeedRestart()
 	}
 	jsonObj(c, "", nil)
-}'''
-    if move_old in text:
-        text = text.replace(move_old, move_new)
+}
 
-    path.write_text(text, encoding="utf-8")
+func (a *XraySettingController) parseOutboundSubURL(c *gin.Context) {
+	rawURL := c.PostForm("url")
+	allowPrivate := c.PostForm("allowPrivate") == "true"
+	svc := service.OutboundSubscriptionService{}
+	tmp, err := svc.Create("preview", rawURL, "", false, 600, allowPrivate, false, "", "", "", "")
+	if err != nil {
+		jsonMsg(c, "Parse failed", err)
+		return
+	}
+	obs, err := svc.Refresh(tmp.Id)
+	_ = svc.Delete(tmp.Id)
+	if err != nil {
+		jsonMsg(c, "Parse failed", err)
+		return
+	}
+	jsonObj(c, obs, nil)
+}
+'''
 
 
-def patch_job() -> None:
-    path = ROOT / "web/job/outbound_subscription_job.go"
+def patch_controller() -> None:
+    path = ROOT / "web/controller/xray_setting.go"
     text = path.read_text(encoding="utf-8")
 
-    old_runtime_block = (
-        "\t\tport := j.xraySvc.GetXrayAPIPort()\n"
-        "\t\tj.subService.SyncAllRuntime(port)\n"
-        "\t\tvar legacy int64\n"
-        "\t\tdatabase.GetDB().Model(&model.OutboundSubscription{}).Where(\"enabled = ? AND (balancer_tag = '' OR balancer_tag IS NULL)\", true).Count(&legacy)\n"
-        "\t\tif legacy > 0 {\n"
-        "\t\t\tj.xraySvc.SetToNeedRestart()\n"
-        "\t\t}\n"
-    )
-    new_runtime_block = (
-        "\t\tport := j.xraySvc.GetXrayAPIPort()\n"
-        "\t\tneedRestart := j.subService.SyncAllRuntime(port)\n"
-        "\t\tvar legacy int64\n"
-        "\t\tdatabase.GetDB().Model(&model.OutboundSubscription{}).Where(\"enabled = ? AND (balancer_tag = '' OR balancer_tag IS NULL)\", true).Count(&legacy)\n"
-        "\t\tif needRestart || legacy > 0 {\n"
-        "\t\t\tj.xraySvc.SetToNeedRestart()\n"
-        "\t\t}\n"
-    )
-    if old_runtime_block in text:
-        text = text.replace(old_runtime_block, new_runtime_block)
-        path.write_text(text, encoding="utf-8")
-        return
-
-    if "needRestart := j.subService.SyncAllRuntime" in text:
-        return
-
-    if '"github.com/mhsanaei/3x-ui/v3/database"' not in text:
+    # imports
+    if '"fmt"' not in text:
         text = text.replace(
-            '"github.com/mhsanaei/3x-ui/v3/logger"\n',
-            '"github.com/mhsanaei/3x-ui/v3/database"\n'
-            '\t"github.com/mhsanaei/3x-ui/v3/database/model"\n'
-            '\t"github.com/mhsanaei/3x-ui/v3/logger"\n',
+            '"encoding/json"\n',
+            '"encoding/json"\n\t"fmt"\n\t"strconv"\n\t"strings"\n',
         )
-    text = text.replace(
-        "\tif count > 0 {\n"
-        "\t\tlogger.Infof(\"Refreshed %d outbound subscription(s)\", count)\n"
-        "\t\t// Ask the xray manager to restart/reload on the next 30s check.\n"
-        "\t\tj.xraySvc.SetToNeedRestart()\n",
-        "\tif count > 0 {\n"
-        "\t\tlogger.Infof(\"Refreshed %d outbound subscription(s)\", count)\n"
-        + new_runtime_block,
-    )
+    if '"github.com/mhsanaei/3x-ui/v2/logger"' not in text:
+        text = text.replace(
+            '"github.com/mhsanaei/3x-ui/v2/util/common"\n',
+            '"github.com/mhsanaei/3x-ui/v2/logger"\n'
+            '\t"github.com/mhsanaei/3x-ui/v2/util/common"\n',
+        )
+
+    if "OutboundSubscriptionService" not in text:
+        text = text.replace(
+            "\tXrayService        service.XrayService\n",
+            "\tXrayService                 service.XrayService\n"
+            "\tOutboundSubscriptionService service.OutboundSubscriptionService\n",
+        )
+
+    if "outbound-subs" not in text:
+        text = text.replace(
+            '\tg.POST("/testOutbound", a.testOutbound)\n',
+            '\tg.POST("/testOutbound", a.testOutbound)\n\n'
+            '\tg.GET("/outbound-subs", a.listOutboundSubs)\n'
+            '\tg.POST("/outbound-subs", a.createOutboundSub)\n'
+            '\tg.POST("/outbound-subs/:id/refresh", a.refreshOutboundSub)\n'
+            '\tg.POST("/outbound-subs/:id/move", a.moveOutboundSub)\n'
+            '\tg.POST("/outbound-subs/:id", a.updateOutboundSub)\n'
+            '\tg.DELETE("/outbound-subs/:id", a.deleteOutboundSub)\n'
+            '\tg.POST("/outbound-subs/:id/del", a.deleteOutboundSub)\n'
+            '\tg.POST("/outbound-subs/parse", a.parseOutboundSubURL)\n',
+        )
+
+    # Surface subscription outbounds in getXraySetting response
+    if "subscriptionOutbounds" not in text:
+        text = text.replace(
+            '\txrayResponse := map[string]interface{}{\n'
+            '\t\t"xraySetting":     json.RawMessage(xraySetting),\n'
+            '\t\t"inboundTags":     json.RawMessage(inboundTags),\n'
+            '\t\t"outboundTestUrl": outboundTestUrl,\n'
+            "\t}",
+            '\txrayResponse := map[string]interface{}{\n'
+            '\t\t"xraySetting":     json.RawMessage(xraySetting),\n'
+            '\t\t"inboundTags":     json.RawMessage(inboundTags),\n'
+            '\t\t"outboundTestUrl": outboundTestUrl,\n'
+            "\t}\n"
+            "\tif subObs, err := a.OutboundSubscriptionService.AllActiveOutbounds(); err == nil && len(subObs) > 0 {\n"
+            '\t\txrayResponse["subscriptionOutbounds"] = subObs\n'
+            "\t}\n"
+            "\tif subTags, err := a.OutboundSubscriptionService.AllActiveOutboundTags(); err == nil && len(subTags) > 0 {\n"
+            '\t\txrayResponse["subscriptionOutboundTags"] = subTags\n'
+            "\t}",
+        )
+
+    if "func (a *XraySettingController) listOutboundSubs" not in text:
+        text = text.rstrip() + "\n" + CONTROLLER_HANDLERS + "\n"
+
     path.write_text(text, encoding="utf-8")
 
 
-def patch_outbounds_tab() -> None:
-    path = ROOT / "frontend/src/pages/xray/outbounds/OutboundsTab.tsx"
+def patch_vue_outbounds() -> None:
+    path = ROOT / "web/html/settings/xray/outbounds.html"
     text = path.read_text(encoding="utf-8")
+    if "showOutboundSubs" in text:
+        return
+    inject = '''
+    <a-row>
+        <a-col :xs="24" :sm="24" :lg="24">
+            <a-button type="default" icon="cloud-download" @click="showOutboundSubs">
+                Subscriptions
+            </a-button>
+            <a-tag v-if="outboundSubs && outboundSubs.length" color="blue" :style="{ marginLeft: '8px' }">
+                [[ outboundSubs.length ]] sub(s)
+            </a-tag>
+        </a-col>
+    </a-row>
 
-    if "balancerTag" in text:
+    <a-modal :title="'Outbound Subscriptions'" v-model="subModalVisible"
+        :footer="null" :width="isMobile ? '100%' : 720"
+        :class="themeSwitcher.currentTheme">
+        <a-form layout="vertical">
+            <a-form-item label="Remark">
+                <a-input v-model="subForm.remark" placeholder="e.g. providers"></a-input>
+            </a-form-item>
+            <a-form-item label="Subscription URL" required>
+                <a-input v-model="subForm.url" placeholder="https://..."></a-input>
+            </a-form-item>
+            <a-form-item label="Balancer name">
+                <a-input v-model="subForm.balancerTag" placeholder="e.g. sub1"
+                    @change="onSubBalancerChange"></a-input>
+            </a-form-item>
+            <a-form-item label="Tag prefix">
+                <a-input v-model="subForm.tagPrefix" placeholder="auto from balancer"></a-input>
+            </a-form-item>
+            <a-form-item label="Balancer strategy">
+                <a-select v-model="subForm.balancerStrategy" :dropdown-class-name="themeSwitcher.currentTheme">
+                    <a-select-option value="roundRobin">roundRobin</a-select-option>
+                    <a-select-option value="random">random</a-select-option>
+                    <a-select-option value="leastPing">leastPing</a-select-option>
+                    <a-select-option value="leastLoad">leastLoad</a-select-option>
+                </a-select>
+            </a-form-item>
+            <a-form-item label="Fallback outbound">
+                <a-input v-model="subForm.fallbackTag" placeholder="direct (optional)"></a-input>
+            </a-form-item>
+            <a-form-item label="Update interval (minutes)">
+                <a-input-number v-model="subForm.updateIntervalMin" :min="1" :max="10080"></a-input-number>
+            </a-form-item>
+            <a-form-item>
+                <a-checkbox v-model="subForm.enabled">Enabled</a-checkbox>
+                <a-checkbox v-model="subForm.prepend" :style="{ marginLeft: '12px' }">Prepend outbounds</a-checkbox>
+            </a-form-item>
+            <a-space>
+                <a-button type="primary" :loading="subSaving" @click="saveOutboundSub">
+                    [[ subForm.id ? 'Update' : 'Add' ]]
+                </a-button>
+                <a-button @click="resetSubForm" v-if="subForm.id">Cancel edit</a-button>
+            </a-space>
+            <p v-if="subForm.balancerTag" :style="{ marginTop: '8px', opacity: 0.75 }">
+                With a balancer name, outbounds sync live via gRPC. Set Routing Rules yourself to that balancerTag.
+            </p>
+        </a-form>
+        <a-divider></a-divider>
+        <a-table :columns="subColumns" :data-source="outboundSubs" :pagination="false"
+            :row-key="r => r.id" size="small" :scroll="isMobile ? {} : { x: 600 }">
+            <template slot="actions" slot-scope="text, row">
+                <a-button size="small" icon="sync" :loading="subRefreshingId===row.id"
+                    @click="refreshOutboundSub(row.id)"></a-button>
+                <a-button size="small" icon="edit" @click="editOutboundSub(row)"></a-button>
+                <a-popconfirm title="Delete subscription?" @confirm="deleteOutboundSub(row.id)"
+                    :overlay-class-name="themeSwitcher.currentTheme"
+                    ok-text="Yes" cancel-text="No">
+                    <a-button size="small" icon="delete" type="danger"></a-button>
+                </a-popconfirm>
+            </template>
+            <template slot="balancer" slot-scope="text, row">
+                <a-tag v-if="row.balancerTag" color="blue">[[ row.balancerTag ]]</a-tag>
+                <span v-else>-</span>
+            </template>
+            <template slot="count" slot-scope="text, row">
+                [[ row.outboundCount || 0 ]]
+            </template>
+        </a-table>
+    </a-modal>
+'''
+    # Insert after first a-space / opening row block
+    anchor = '    <a-row>\n        <a-col :xs="12" :sm="12" :lg="12">\n            <a-space direction="horizontal" size="small">\n                <a-button type="primary" icon="plus" @click="addOutbound">'
+    if anchor not in text:
+        raise RuntimeError("patch_vue_outbounds: anchor not found")
+    text = text.replace(anchor, inject + "\n" + anchor, 1)
+    path.write_text(text, encoding="utf-8")
+
+
+def patch_vue_xray_js() -> None:
+    path = ROOT / "web/html/xray.html"
+    text = path.read_text(encoding="utf-8")
+    if "showOutboundSubs" in text:
         return
 
-    text = text.replace(
-        "  tagPrefix?: string;\n  updateInterval?: number;",
-        "  tagPrefix?: string;\n  balancerTag?: string;\n  targetInboundTag?: string;\n  balancerStrategy?: string;\n  fallbackTag?: string;\n  updateInterval?: number;",
-    )
-    text = text.replace(
-        "  inboundTags: string[];",
-        "  inboundTags: string[];",
-    )
-    text = text.replace(
-        "  inboundTags: _inboundTags,",
-        "  inboundTags,",
-    )
-    text = text.replace(
-        '  const [newSub, setNewSub] = useState({ remark: \'\', url: \'\', tagPrefix: \'\', updateInterval: 600, enabled: true, allowPrivate: false, prepend: false });',
-        '  const [newSub, setNewSub] = useState({ remark: \'\', url: \'\', tagPrefix: \'\', balancerTag: \'\', targetInboundTag: \'\', balancerStrategy: \'roundRobin\', fallbackTag: \'\', updateInterval: 600, enabled: true, allowPrivate: false, prepend: false });',
-    )
-    text = text.replace(
-        "    tagPrefix: src.tagPrefix ?? '',\n    updateInterval: src.updateInterval ?? 600,",
-        "    tagPrefix: src.tagPrefix ?? '',\n    balancerTag: src.balancerTag ?? '',\n    targetInboundTag: src.targetInboundTag ?? '',\n    balancerStrategy: src.balancerStrategy ?? 'roundRobin',\n    fallbackTag: src.fallbackTag ?? '',\n    updateInterval: src.updateInterval ?? 600,",
-    )
-    text = text.replace(
-        '    setNewSub({ remark: \'\', url: \'\', tagPrefix: \'\', updateInterval: 600, enabled: true, allowPrivate: false, prepend: false });',
-        '    setNewSub({ remark: \'\', url: \'\', tagPrefix: \'\', balancerTag: \'\', targetInboundTag: \'\', balancerStrategy: \'roundRobin\', fallbackTag: \'\', updateInterval: 600, enabled: true, allowPrivate: false, prepend: false });',
-    )
-    text = text.replace(
-        "      tagPrefix: sub.tagPrefix ?? '',\n      updateInterval: sub.updateInterval ?? 600,",
-        "      tagPrefix: sub.tagPrefix ?? '',\n      balancerTag: sub.balancerTag ?? '',\n      targetInboundTag: sub.targetInboundTag ?? '',\n      balancerStrategy: sub.balancerStrategy ?? 'roundRobin',\n      fallbackTag: sub.fallbackTag ?? '',\n      updateInterval: sub.updateInterval ?? 600,",
-    )
-    text = text.replace(
-        "  async function saveSub() {\n    if (!newSub.url.trim()) {",
-        "  async function saveSub() {\n    if (newSub.balancerTag.trim() && !newSub.targetInboundTag.trim()) {\n      messageApi.warning(t('pages.xray.outboundSub.toastInboundRequired'));\n      return;\n    }\n    if (!newSub.url.trim()) {",
-    )
+    # data fields — find data() return object near outboundTestStates
+    data_inject = """
+      outboundSubs: [],
+      subModalVisible: false,
+      subSaving: false,
+      subRefreshingId: 0,
+      subForm: {
+        id: null, remark: '', url: '', tagPrefix: '', balancerTag: '',
+        balancerStrategy: 'roundRobin', fallbackTag: '', updateIntervalMin: 10,
+        enabled: true, prepend: false, allowPrivate: false
+      },
+      subColumns: [
+        { title: '#', dataIndex: 'id', width: 50 },
+        { title: 'Remark', dataIndex: 'remark' },
+        { title: 'Balancer', key: 'balancer', scopedSlots: { customRender: 'balancer' } },
+        { title: 'Count', key: 'count', scopedSlots: { customRender: 'count' }, width: 70 },
+        { title: '', key: 'actions', scopedSlots: { customRender: 'actions' }, width: 140 },
+      ],
+"""
+    # Insert after loadingStates or similar in data
+    m = re.search(r"outboundTestStates:\s*\{\},?", text)
+    if not m:
+        m = re.search(r"outboundsTraffic:\s*\[\],?", text)
+    if not m:
+        raise RuntimeError("patch_vue_xray_js: data anchor not found")
+    insert_at = m.end()
+    text = text[:insert_at] + "\n" + data_inject + text[insert_at:]
 
-    form_block = '''              <Input value={newSub.tagPrefix} onChange={(e) => setNewSub({ ...newSub, tagPrefix: e.target.value })} placeholder={t('pages.xray.outboundSub.tagPrefixPlaceholder')} />
-              <Form.Item label={t('pages.xray.outboundSub.balancerTag')} style={{ marginBottom: 8 }}>
-                <Input
-                  value={newSub.balancerTag}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    setNewSub((prev) => ({
-                      ...prev,
-                      balancerTag: v,
-                      tagPrefix: prev.tagPrefix || (v.trim() ? `${v.trim()}-` : ''),
-                    }));
-                  }}
-                  placeholder={t('pages.xray.outboundSub.balancerTagPlaceholder')}
-                />
-              </Form.Item>
-              <Form.Item label={t('pages.xray.outboundSub.targetInbound')} style={{ marginBottom: 8 }}>
-                <Select
-                  allowClear
-                  showSearch
-                  optionFilterProp="label"
-                  value={newSub.targetInboundTag || undefined}
-                  placeholder={t('pages.xray.outboundSub.targetInboundPlaceholder')}
-                  options={inboundTags.map((tag) => ({ value: tag, label: tag }))}
-                  onChange={(v) => setNewSub({ ...newSub, targetInboundTag: v ?? '' })}
-                />
-              </Form.Item>
-              <Form.Item label={t('pages.xray.outboundSub.balancerStrategy')} style={{ marginBottom: 8 }}>
-                <Select
-                  value={newSub.balancerStrategy}
-                  options={[
-                    { value: 'roundRobin', label: 'roundRobin' },
-                    { value: 'random', label: 'random' },
-                    { value: 'leastPing', label: 'leastPing' },
-                    { value: 'leastLoad', label: 'leastLoad' },
-                  ]}
-                  onChange={(v) => setNewSub({ ...newSub, balancerStrategy: v })}
-                />
-              </Form.Item>
-              <Form.Item label={t('pages.xray.outboundSub.fallbackTag')} style={{ marginBottom: 8 }}>
-                <Input value={newSub.fallbackTag} onChange={(e) => setNewSub({ ...newSub, fallbackTag: e.target.value })} placeholder={t('pages.xray.outboundSub.fallbackTagPlaceholder')} />
-              </Form.Item>'''
+    methods = r'''
+      showOutboundSubs() {
+        this.subModalVisible = true;
+        this.loadOutboundSubs();
+      },
+      resetSubForm() {
+        this.subForm = {
+          id: null, remark: '', url: '', tagPrefix: '', balancerTag: '',
+          balancerStrategy: 'roundRobin', fallbackTag: '', updateIntervalMin: 10,
+          enabled: true, prepend: false, allowPrivate: false
+        };
+      },
+      onSubBalancerChange() {
+        const v = (this.subForm.balancerTag || '').trim();
+        if (v && !(this.subForm.tagPrefix || '').trim()) {
+          this.subForm.tagPrefix = v + '-';
+        }
+      },
+      async loadOutboundSubs() {
+        const msg = await HttpUtil.get("/panel/xray/outbound-subs");
+        if (msg.success) {
+          this.outboundSubs = Array.isArray(msg.obj) ? msg.obj : [];
+        }
+      },
+      editOutboundSub(row) {
+        this.subForm = {
+          id: row.id,
+          remark: row.remark || '',
+          url: row.url || '',
+          tagPrefix: row.tagPrefix || '',
+          balancerTag: row.balancerTag || '',
+          balancerStrategy: row.balancerStrategy || 'roundRobin',
+          fallbackTag: row.fallbackTag || '',
+          updateIntervalMin: Math.max(1, Math.round((row.updateInterval || 600) / 60)),
+          enabled: row.enabled !== false,
+          prepend: !!row.prepend,
+          allowPrivate: !!row.allowPrivate
+        };
+      },
+      async saveOutboundSub() {
+        if (!(this.subForm.url || '').trim()) {
+          Vue.prototype.$message.warning('URL required');
+          return;
+        }
+        this.subSaving = true;
+        const body = {
+          remark: this.subForm.remark || '',
+          url: this.subForm.url.trim(),
+          tagPrefix: this.subForm.tagPrefix || '',
+          balancerTag: this.subForm.balancerTag || '',
+          balancerStrategy: this.subForm.balancerStrategy || 'roundRobin',
+          fallbackTag: this.subForm.fallbackTag || '',
+          updateInterval: String(Math.max(60, (this.subForm.updateIntervalMin || 10) * 60)),
+          enabled: this.subForm.enabled ? 'true' : 'false',
+          prepend: this.subForm.prepend ? 'true' : 'false',
+          allowPrivate: this.subForm.allowPrivate ? 'true' : 'false'
+        };
+        let msg;
+        if (this.subForm.id) {
+          msg = await HttpUtil.post("/panel/xray/outbound-subs/" + this.subForm.id, body);
+        } else {
+          msg = await HttpUtil.post("/panel/xray/outbound-subs", body);
+        }
+        this.subSaving = false;
+        if (msg.success) {
+          this.resetSubForm();
+          await this.loadOutboundSubs();
+          await this.getXraySetting();
+        }
+      },
+      async refreshOutboundSub(id) {
+        this.subRefreshingId = id;
+        const msg = await HttpUtil.post("/panel/xray/outbound-subs/" + id + "/refresh");
+        this.subRefreshingId = 0;
+        if (msg.success) {
+          await this.loadOutboundSubs();
+          await this.getXraySetting();
+        }
+      },
+      async deleteOutboundSub(id) {
+        const msg = await HttpUtil.post("/panel/xray/outbound-subs/" + id + "/del");
+        if (msg.success) {
+          await this.loadOutboundSubs();
+          await this.getXraySetting();
+        }
+      },
+'''
+    text = text.replace("    methods: {\n", "    methods: {\n" + methods, 1)
 
+    # Load subs when settings fetched
     text = text.replace(
-        '              <Input value={newSub.tagPrefix} onChange={(e) => setNewSub({ ...newSub, tagPrefix: e.target.value })} placeholder={t(\'pages.xray.outboundSub.tagPrefixPlaceholder\')} />',
-        form_block,
-    )
-
-    text = text.replace(
-        "{t('pages.xray.outboundSub.restartHint')}",
-        "{newSub.balancerTag.trim() ? t('pages.xray.outboundSub.runtimeHint') : t('pages.xray.outboundSub.restartHint')}",
+        "          this.outboundTestUrl = result.outboundTestUrl || 'https://www.google.com/generate_204';\n"
+        "          this.oldOutboundTestUrl = this.outboundTestUrl;\n"
+        "          this.saveBtnDisable = true;",
+        "          this.outboundTestUrl = result.outboundTestUrl || 'https://www.google.com/generate_204';\n"
+        "          this.oldOutboundTestUrl = this.outboundTestUrl;\n"
+        "          this.saveBtnDisable = true;\n"
+        "          this.loadOutboundSubs();",
     )
 
     path.write_text(text, encoding="utf-8")
 
 
 def patch_translations() -> None:
-    for code, extra in (
-        ("en-US", {
-            "balancerTag": "Balancer name",
-            "balancerTagPlaceholder": "e.g. sub1",
-            "targetInbound": "Route inbound",
-            "targetInboundPlaceholder": "Select inbound for this balancer",
-            "balancerStrategy": "Balancer strategy",
-            "fallbackTag": "Fallback outbound (optional)",
-            "fallbackTagPlaceholder": "direct",
-            "runtimeHint": "With a balancer name, outbounds sync into the balancer on schedule — no Xray restart. Set Routing Rules yourself in the panel.",
-            "colBalancer": "Balancer",
+    for code, pairs in (
+        ("en_US", {
+            "outboundSubTitle": "Outbound Subscriptions",
+            "outboundSubBalancer": "Balancer name",
+            "outboundSubHint": "With balancer name, outbounds sync live. Configure Routing Rules yourself.",
         }),
-        ("fa-IR", {
-            "balancerTag": "نام بالانسر",
-            "balancerTagPlaceholder": "مثلاً sub1",
-            "targetInbound": "اینباند مقصد",
-            "targetInboundPlaceholder": "اینباند ورودی کاربران را انتخاب کنید",
-            "balancerStrategy": "استراتژی بالانسر",
-            "fallbackTag": "اوتباند fallback (اختیاری)",
-            "fallbackTagPlaceholder": "direct",
-            "runtimeHint": "با نام بالانسر، اوتباندها طبق بازه زمانی داخل بالانسر sync می‌شوند — بدون ریستارت. Routing Rules را خودتان در پنل تنظیم کنید.",
-            "colBalancer": "بالانسر",
+        ("fa_IR", {
+            "outboundSubTitle": "سابسکریپشن اوتباند",
+            "outboundSubBalancer": "نام بالانسر",
+            "outboundSubHint": "با نام بالانسر، اوتباندها زنده sync می‌شوند. Routing را خودتان تنظیم کنید.",
         }),
     ):
-        path = ROOT / "web/translation" / f"{code}.json"
+        path = ROOT / "web/translation" / f"translate.{code}.toml"
+        if not path.exists():
+            continue
         raw = path.read_text(encoding="utf-8")
-        for key, val in extra.items():
-            if f'"{key}"' in raw:
-                continue
-            raw = raw.replace(
-                '"restartHint":',
-                f'"{key}": "{val}",\n      "restartHint":',
-                1,
-            )
+        if "outboundSubTitle" in raw:
+            continue
+        # Append under [pages.xray] if present, else end of file
+        block = "\n".join(f'{k} = "{v}"' for k, v in pairs.items()) + "\n"
+        if "[pages.xray]" in raw:
+            raw = raw.replace("[pages.xray]", "[pages.xray]\n" + block, 1)
+        else:
+            raw += "\n[pages.xray]\n" + block
         path.write_text(raw, encoding="utf-8")
 
 
-def patch_parse_preview() -> None:
-    path = ROOT / "web/controller/xray_setting.go"
-    text = path.read_text(encoding="utf-8")
-    text = text.replace(
-        'tmp, err := svc.Create("preview", rawURL, "", false, 600, allowPrivate, false)',
-        'tmp, err := svc.Create("preview", rawURL, "", false, 600, allowPrivate, false, "", "", "", "")',
-    )
-    path.write_text(text, encoding="utf-8")
+def reset_git_files() -> None:
+    if not (ROOT / ".git").exists():
+        return
+    rels = [
+        "database/model/model.go",
+        "database/db.go",
+        "web/controller/xray_setting.go",
+        "web/service/xray.go",
+        "web/web.go",
+        "xray/api.go",
+        "web/html/settings/xray/outbounds.html",
+        "web/html/xray.html",
+        "web/translation/translate.en_US.toml",
+        "web/translation/translate.fa_IR.toml",
+    ]
+    subprocess.run(["git", "checkout", "--", *rels], cwd=ROOT, check=False)
 
 
 def main() -> None:
     if not ROOT.exists():
         print(f"Target not found: {ROOT}", file=sys.stderr)
         sys.exit(1)
+    # Guard: this patch targets Vue-based v2.x
+    if (ROOT / "frontend/src").exists() and not (ROOT / "web/html/xray.html").exists():
+        print("ERROR: this panel-patch targets 3x-ui v2.9.0 (Vue UI). Found React frontend.", file=sys.stderr)
+        sys.exit(2)
     reset_git_files()
     copy_overlay()
     patch_api_go()
     patch_model()
-    patch_outbound_subscription_service()
+    patch_db()
+    patch_xray_service()
+    patch_web_cron()
     patch_controller()
-    patch_job()
-    patch_parse_preview()
+    patch_vue_outbounds()
+    patch_vue_xray_js()
     patch_translations()
-    print("panel-patch applied to", ROOT)
+    print("panel-patch (v2.9.0 + subscriptions + balancer) applied to", ROOT)
 
 
 if __name__ == "__main__":

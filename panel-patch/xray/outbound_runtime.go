@@ -1,4 +1,4 @@
-package xray
+﻿package xray
 
 import (
 	"context"
@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mhsanaei/3x-ui/v3/logger"
+	"github.com/mhsanaei/3x-ui/v2/logger"
 	routerCommand "github.com/xtls/xray-core/app/router/command"
 	routerConf "github.com/xtls/xray-core/app/router"
 	"github.com/xtls/xray-core/app/proxyman/command"
@@ -64,6 +64,7 @@ func (x *XrayAPI) ListOutboundTags() ([]string, error) {
 	defer cancel()
 	resp, err := client.ListOutbounds(ctx, &command.ListOutboundsRequest{})
 	if err != nil {
+		// Older HandlerService builds may lack ListOutbounds — caller can still add/remove by known tags.
 		return nil, err
 	}
 	tags := make([]string, 0, len(resp.GetOutbounds()))
@@ -76,7 +77,7 @@ func (x *XrayAPI) ListOutboundTags() ([]string, error) {
 }
 
 // EnsureBalancer creates or refreshes a balancer pool with explicit outbound tags.
-// Does not create routing rules — the user configures those in the panel.
+// Does not create routing rules â€” the user configures those in the panel.
 func (x *XrayAPI) EnsureBalancer(balancerTag string, outboundTags []string, strategy, fallbackTag string) error {
 	if x.RoutingServiceClient == nil {
 		return fmt.Errorf("routing service not initialized")
@@ -129,3 +130,4 @@ func (x *XrayAPI) EnsureBalancer(balancerTag string, outboundTags []string, stra
 	}
 	return err
 }
+

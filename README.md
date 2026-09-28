@@ -1,53 +1,31 @@
-# 3x-ui Sub Balancer (Private)
+# 3x-ui + Outbound Subscriptions + Balancer
 
-پچ [3x-ui](https://github.com/MHSanaei/3x-ui) برای **ساب + بالانسر** داخل پنل — ریپوی **خصوصی** فقط برای `sader21`.
+Public fork patch on **3x-ui v2.9.0** with:
 
-## نصب روی سرور
+- Outbound **Subscriptions** (backported)
+- Named **balancer** + live gRPC sync
+- Manual Routing Rules in the panel
+- Xray core is **not** updated by this installer
 
-### ۱) ساخت Token (یک‌بار)
-
-GitHub → **Settings** → **Developer settings** → **Personal access tokens** → **Tokens (classic)** → Generate
-
-- Scope: **`repo`** (دسترسی به ریپوی private)
-- توکن را کپی کن
-
-### ۲) نصب تازه
+## Install (one command)
 
 ```bash
-export GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxx
-git clone https://x-access-token:${GITHUB_TOKEN}@github.com/sader21/3x-ui-sub-balancer.git /opt/3x-ui-sub-balancer
-bash /opt/3x-ui-sub-balancer/install.sh
+bash <(curl -Ls https://raw.githubusercontent.com/vpncore1/3x-ui/main/install.sh)
 ```
 
-### ۳) آپگرید (سرور که الان 3x-ui دارد)
+Custom panel port:
 
 ```bash
-export GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxx
-bash /opt/3x-ui-sub-balancer/upgrade.sh
+PANEL_PORT=1872 bash <(curl -Ls https://raw.githubusercontent.com/vpncore1/3x-ui/main/install.sh)
 ```
 
-یا اگر پوشه را نداری:
+## Usage
 
-```bash
-export GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxx
-git clone https://x-access-token:${GITHUB_TOKEN}@github.com/sader21/3x-ui-sub-balancer.git /opt/3x-ui-sub-balancer
-bash /opt/3x-ui-sub-balancer/upgrade.sh
-```
+1. Panel → **Xray** → **Outbounds** → **Subscriptions**
+2. Add subscription URL + balancer name (e.g. `sub1`)
+3. Refresh
+4. **Routing** → Rule with the same `balancerTag`
 
-> **نکته:** با ریپوی private دیگر `curl raw.githubusercontent.com` کار نمی‌کند — حتماً `GITHUB_TOKEN` بده.
+## Base version
 
-## استفاده در پنل
-
-1. **Xray → Outbounds → Subscriptions** → Add
-2. لینک ساب + **نام بالانسر** + بازه آپدیت
-3. **Refresh**
-4. **Routing** → Rule با همان `balancerTag`
-5. در صورت نیاز **Restart Xray**
-
-## نسخه پایه
-
-Upstream: **3x-ui v3.3.0** — override: `XUI_TAG=v3.3.1 bash upgrade.sh`
-
-## مجوز
-
-سورس پایه: [MHSanaei/3x-ui](https://github.com/MHSanaei/3x-ui)
+Upstream: [MHSanaei/3x-ui v2.9.0](https://github.com/MHSanaei/3x-ui/releases/tag/v2.9.0)

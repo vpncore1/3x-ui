@@ -1,6 +1,17 @@
 #!/usr/bin/env bash
-# Install 3x-ui (official) then apply subscription + balancer patch.
+# Public one-command install — 3x-ui v2.9.0 + Outbound Subscriptions + balancer
+# Usage:
+#   bash <(curl -Ls https://raw.githubusercontent.com/vpncore1/3x-ui/main/install.sh)
+# Optional:
+#   PANEL_PORT=1872 bash <(curl -Ls https://raw.githubusercontent.com/vpncore1/3x-ui/main/install.sh)
 set -euo pipefail
+
+REPO_RAW="${REPO_RAW:-https://raw.githubusercontent.com/vpncore1/3x-ui/main}"
+REPO_GIT="${REPO_GIT:-https://github.com/vpncore1/3x-ui.git}"
+PATCH_DIR="${PATCH_DIR:-/opt/3x-ui-sub-balancer}"
+XUI_TAG="${XUI_TAG:-v2.9.0}"
+PANEL_PORT="${PANEL_PORT:-}"
+KEEP_CORE="${KEEP_CORE:-1}"
 
 red='\033[0;31m'
 green='\033[0;32m'
@@ -9,27 +20,39 @@ plain='\033[0m'
 
 [[ $EUID -ne 0 ]] && echo -e "${red}Run as root${plain}" && exit 1
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -qq
+apt-get install -y -qq curl ca-certificates git tar rsync build-essential >/dev/null
 
-echo -e "${green}==> Step 1: Install base 3x-ui (if needed)${plain}"
+echo -e "${green}==> Step 1: Install base 3x-ui ${XUI_TAG}${plain}"
 if [[ ! -f /usr/local/x-ui/x-ui ]]; then
-  echo -e "${yellow}3x-ui not found — installing official panel first...${plain}"
-  bash <(curl -Ls https://raw.githubusercontent.com/MHSanaei/3x-ui/master/install.sh)
-else
-  echo "3x-ui already installed, skipping base install."
+  curl -Ls https://raw.githubusercontent.com/MHSanaei/3x-ui/master/install.sh -o /tmp/xui-official.sh
+  if [[ -n "$PANEL_PORT" ]]; then
+    # noninteractive-ish: confirm defaults then set port if prompted path differs by version
+    bash /tmp/xui-official.sh "$XUI_TAG" || true
+  else
+    bash /tmp/xui-official.sh "$XUI_TAG" || true
+  fi
 fi
-
-echo -e "${green}==> Step 2: Apply subscription + balancer patch${plain}"
-if [[ -f "$SCRIPT_DIR/upgrade.sh" ]]; then
-  bash "$SCRIPT_DIR/upgrade.sh"
-elif [[ -f /opt/3x-ui-sub-balancer/upgrade.sh ]]; then
-  bash /opt/3x-ui-sub-balancer/upgrade.sh
-else
-  echo -e "${red}upgrade.sh not found. Clone the private repo first:${plain}"
-  echo "  export GITHUB_TOKEN=ghp_xxxxxxxx"
-  echo "  git clone https://github.com/sader21/3x-ui-sub-balancer.git /opt/3x-ui-sub-balancer"
-  echo "  bash /opt/3x-ui-sub-balancer/install.sh"
+if [[ ! -f /usr/local/x-ui/x-ui ]]; then
+  echo -e "${red}Base 3x-ui install failed${plain}"
   exit 1
 fi
 
-echo -e "${green}Done. Open the panel URL shown during install.${plain}"
+if [[ -n "$PANEL_PORT" ]]; then
+  /usr/local/x-ui/x-ui setting -port "$PANEL_PORT" || true
+fi
+
+echo -e "${green}==> Step 2: Fetch patch sources (public)${plain}"
+rm -rf "$PATCH_DIR"
+git clone --depth 1 "$REPO_GIT" "$PATCH_DIR"
+
+echo -e "${green}==> Step 3: Build & install patched panel (KEEP_CORE=${KEEP_CORE})${plain}"
+export XUI_TAG KEEP_CORE
+export BUILD_DIR="${BUILD_DIR:-/opt/3x-ui-build}"
+export INSTALL_BIN="/usr/local/x-ui/x-ui"
+bash "$PATCH_DIR/panel-patch/build_on_server.sh"
+
+echo -e "${green}Done.${plain}"
+/usr/local/x-ui/x-ui setting -show true 2>/dev/null || true
+echo -e "${yellow}Panel: Xray → Outbounds → Subscriptions${plain}"

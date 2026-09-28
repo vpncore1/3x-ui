@@ -1,35 +1,43 @@
-# پچ پنل — ساب + بالانسر داخل 3x-ui
+# پچ پنل — ساب + بالانسر روی **3x-ui v2.9.0**
 
-این پوشه سورس پنل 3x-ui را patch می‌کند تا **بدون اسکریپت خارجی**:
+این پوشه روی پایهٔ رسمی [v2.9.0](https://github.com/MHSanaei/3x-ui/releases/tag/v2.9.0) این‌ها را اضافه می‌کند:
 
-- فیلدهای **نام بالانسر** (`sub1`)، **اینباند مقصد**، **استراتژی** و **fallback** در همان فرم **Subscriptions** (Outbounds → Subscriptions) باشد
-- بعد از refresh ساب، اوتباندها **لحظه‌ای** با gRPC اعمال شوند (بدون ریستارت Xray)
-- اوتباندها در بالانسر sync شوند (Routing Rules دستی — توسط خودتان در پنل)
+1. **Outbound Subscriptions** (بک‌پورت از v3.3.0) — UI در همان تب Outbounds
+2. **نام بالانسر / استراتژی / fallback** روی هر ساب
+3. **Sync لحظه‌ای gRPC** برای اوتباندها و بالانسر (بدون اسکریپت خارجی)
+4. Routing Rules همچنان **دستی** در پنل
 
-## فیلدهای جدید در فرم ساب
+> نسخهٔ استوک `install.sh v2.9.0` این قابلیت‌ها را ندارد؛ باید باینری پچ‌شده نصب شود.
 
-| فیلد | مثال | توضیح |
-|------|------|--------|
-| نام بالانسر | `sub1` | تگ ثابت balancer |
-| پیشوند تگ | `sub1-` | خودکار از نام بالانسر |
-| بازه | 30 دقیقه | همان interval قبلی |
-| استراتژی | roundRobin | random / leastPing / leastLoad |
-
-## Build روی سرور
+## نصب / بیلد روی سرور
 
 ```bash
-git clone https://github.com/sader21/3x-ui-sub-balancer.git /opt/3x-ui-sub-balancer
-bash /opt/3x-ui-sub-balancer/panel-patch/build_on_server.sh
+# کلون ریپوی پچ، سپس:
+bash panel-patch/build_on_server.sh
 ```
 
-یا آپگرید یک‌خطی:
+یا با تگ صریح:
 
 ```bash
-bash <(curl -Ls https://raw.githubusercontent.com/sader21/3x-ui-sub-balancer/main/upgrade.sh)
+XUI_TAG=v2.9.0 bash panel-patch/build_on_server.sh
 ```
 
-## مسیر در پنل
+اسکریپت هستهٔ xray را آپدیت نمی‌کند (`KEEP_CORE=1`).
 
-**Xray Configs → Outbounds → Subscriptions**
+## مسیر در پنل (UI قدیمی Vue)
 
-بعد از deploy، فرم ساب فیلدهای بالانسر را نشان می‌دهد. با پر کردن **نام بالانسر** + **اینباند**، دیگر پیام «restart Xray» برای آن ساب معنا ندارد.
+**Xray Settings → Outbounds → دکمه Subscriptions**
+
+1. URL ساب + نام بالانسر (مثلاً `sub1`)
+2. Add / Refresh
+3. Routing → Rule با همان `balancerTag`
+4. در صورت نیاز Restart Xray
+
+## تفاوت با آپستریم
+
+| | `install.sh … v2.9.0` | این پچ |
+|--|--|--|
+| پایه | v2.9.0 | v2.9.0 |
+| Subscriptions اوتباند | ❌ | ✅ |
+| بالانسر runtime | ❌ | ✅ |
+| UI | Vue | Vue + مودال ساب |

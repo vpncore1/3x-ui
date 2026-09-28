@@ -31,3 +31,17 @@ node_modules/
 vendor/
 build/
 dist/
+
+# Local reference clones / caches (do not publish)
+_ref/
+.build-src/
+bin-release/
+panel-patch/_legacy_v330/
+__pycache__/
+GITHUB_PUSH.md
+ubuntu-install.sh
+ubuntu-upgrade.sh
+bootstrap-ubuntu.sh
+gh_pat_tmp.txt
+*.png
+*.jpg

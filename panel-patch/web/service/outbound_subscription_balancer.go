@@ -104,22 +104,18 @@ func ensureRoutingAPIService(cfg map[string]any) bool {
 	return true
 }
 
-// balancerSelectorPrefix returns the xray balancer selector prefix for a subscription.
-// Xray matches outbound tags with strings.HasPrefix, so a short prefix is correct.
-func balancerSelectorPrefix(tagPrefix, balancerTag string, outboundTags []string) string {
-	p := strings.TrimSpace(tagPrefix)
-	p = strings.TrimSuffix(p, "-")
-	if p != "" {
-		return p
+// selectorFromOutboundTags builds balancer selectors from the actual outbound tags
+// fetched from the subscription, so the Balancers UI lists each config explicitly.
+// Xray still matches via HasPrefix, so full tags select exactly those outbounds.
+func selectorFromOutboundTags(outboundTags []string) []any {
+	sel := make([]any, 0, len(outboundTags))
+	for _, tag := range outboundTags {
+		tag = strings.TrimSpace(tag)
+		if tag != "" {
+			sel = append(sel, tag)
+		}
 	}
-	bt := strings.TrimSpace(balancerTag)
-	if bt != "" {
-		return bt
-	}
-	if len(outboundTags) > 0 {
-		return outboundTags[0]
-	}
-	return ""
+	return sel
 }
 
 func replacePrefixedOutbounds(existing []any, prefix string, desired []map[string]any, prepend bool) []any {
@@ -161,7 +157,7 @@ func replacePrefixedOutbounds(existing []any, prefix string, desired []map[strin
 
 // syncSubscriptionIntoTemplate writes fetched outbounds into xrayTemplateConfig
 // (so they appear under Outbounds) and, when balancerTag is set, upserts the balancer
-// with a prefix selector. Routing rules are left to the user.
+// with those outbound tags as selectors. Routing rules are left to the user.
 func syncSubscriptionIntoTemplate(settingSvc *SettingService, balancerTag, tagPrefix, strategy, fallbackTag string, desired []map[string]any, prepend bool) error {
 	if len(desired) == 0 {
 		return nil
@@ -218,10 +214,9 @@ func syncSubscriptionIntoTemplate(settingSvc *SettingService, balancerTag, tagPr
 		if strings.TrimSpace(strategy) == "" {
 			strategy = "roundRobin"
 		}
-		selector := balancerSelectorPrefix(tagPrefix, balancerTag, outboundTags)
 		balancerObj := map[string]any{
 			"tag":      balancerTag,
-			"selector": []any{selector},
+			"selector": selectorFromOutboundTags(outboundTags),
 			"strategy": map[string]any{"type": strategy},
 		}
 		if strings.TrimSpace(fallbackTag) != "" {

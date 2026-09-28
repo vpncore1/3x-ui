@@ -164,8 +164,7 @@ func (s *OutboundSubscriptionService) ApplyRuntimeSync(sub *model.OutboundSubscr
 		}
 	}
 
-	selector := balancerSelectorPrefix(prefix, sub.BalancerTag, outboundTags)
-	if err := api.EnsureBalancer(sub.BalancerTag, []string{selector}, effectiveBalancerStrategy(sub), sub.FallbackTag); err != nil {
+	if err := api.EnsureBalancer(sub.BalancerTag, outboundTags, effectiveBalancerStrategy(sub), sub.FallbackTag); err != nil {
 		logger.Warningf("outbound sub %d: live balancer gRPC failed: %v (template updated)", sub.Id, err)
 		return common.NewError("balancer live sync failed; restart xray:", err)
 	}

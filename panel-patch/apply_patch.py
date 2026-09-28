@@ -150,6 +150,7 @@ func (s *XrayService) GetXrayAPIPort() int {
             )
         merge_fn = '''
 // mergeSubscriptionOutbounds injects subscription outbounds around template outbounds.
+// Tags already present in the template (after template sync) are skipped to avoid duplicates.
 func mergeSubscriptionOutbounds(cfg *xray.Config, prepend, appendList []any) {
 	if len(prepend) == 0 && len(appendList) == 0 {
 		return
@@ -159,6 +160,35 @@ func mergeSubscriptionOutbounds(cfg *xray.Config, prepend, appendList []any) {
 		if err := json.Unmarshal(cfg.OutboundConfigs, &templateOutbounds); err != nil {
 			return
 		}
+	}
+	existing := map[string]bool{}
+	for _, item := range templateOutbounds {
+		if m, ok := item.(map[string]any); ok {
+			if tag, _ := m["tag"].(string); tag != "" {
+				existing[tag] = true
+			}
+		}
+	}
+	filterNew := func(list []any) []any {
+		out := make([]any, 0, len(list))
+		for _, item := range list {
+			m, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			tag, _ := m["tag"].(string)
+			if tag == "" || existing[tag] {
+				continue
+			}
+			existing[tag] = true
+			out = append(out, item)
+		}
+		return out
+	}
+	prepend = filterNew(prepend)
+	appendList = filterNew(appendList)
+	if len(prepend) == 0 && len(appendList) == 0 {
+		return
 	}
 	merged := make([]any, 0, len(prepend)+len(templateOutbounds)+len(appendList))
 	merged = append(merged, prepend...)
@@ -223,12 +253,13 @@ func (a *XraySettingController) afterOutboundSubChange(subID int) {
 		a.XrayService.SetToNeedRestart()
 		return
 	}
-	if !service.UsesRuntimeSync(sub) {
+	// Always write outbounds into the xray template so they appear under Outbounds.
+	if err := a.OutboundSubscriptionService.ApplyRuntimeSync(sub, a.XrayService.GetXrayAPIPort()); err != nil {
+		logger.Warningf("outbound sub %d sync failed: %v", subID, err)
 		a.XrayService.SetToNeedRestart()
 		return
 	}
-	if err := a.OutboundSubscriptionService.ApplyRuntimeSync(sub, a.XrayService.GetXrayAPIPort()); err != nil {
-		logger.Warningf("outbound sub %d runtime sync failed: %v", subID, err)
+	if !service.UsesRuntimeSync(sub) {
 		a.XrayService.SetToNeedRestart()
 	}
 }
@@ -288,6 +319,9 @@ func (a *XraySettingController) updateOutboundSub(c *gin.Context) {
 		jsonMsg(c, "Failed to update outbound subscription", err)
 		return
 	}
+	if _, err := a.OutboundSubscriptionService.Refresh(subID); err != nil {
+		logger.Warningf("outbound sub %d refresh on update: %v", subID, err)
+	}
 	a.afterOutboundSubChange(subID)
 	jsonObj(c, "", nil)
 }
@@ -304,11 +338,10 @@ func (a *XraySettingController) deleteOutboundSub(c *gin.Context) {
 		jsonMsg(c, "Failed to delete outbound subscription", err)
 		return
 	}
-	if subBeforeDel != nil && service.UsesRuntimeSync(subBeforeDel) {
+	if subBeforeDel != nil {
 		_ = a.OutboundSubscriptionService.RemoveRuntimeOutbounds(subBeforeDel, a.XrayService.GetXrayAPIPort())
-	} else {
-		a.XrayService.SetToNeedRestart()
 	}
+	a.XrayService.SetToNeedRestart()
 	jsonObj(c, "", nil)
 }
 
@@ -490,8 +523,8 @@ def patch_vue_outbounds() -> None:
                 </a-button>
                 <a-button @click="resetSubForm" v-if="subForm.id">Cancel edit</a-button>
             </a-space>
-            <p v-if="subForm.balancerTag" :style="{ marginTop: '8px', opacity: 0.75 }">
-                With a balancer name, outbounds sync live via gRPC. Set Routing Rules yourself to that balancerTag.
+            <p :style="{ marginTop: '8px', opacity: 0.75 }">
+                After save/refresh, configs appear under Outbounds. If Balancer name is set, add a Routing rule with balancerTag = that name, then Restart Xray.
             </p>
         </a-form>
         <a-divider></a-divider>
@@ -667,12 +700,12 @@ def patch_translations() -> None:
         ("en_US", {
             "outboundSubTitle": "Outbound Subscriptions",
             "outboundSubBalancer": "Balancer name",
-            "outboundSubHint": "With balancer name, outbounds sync live. Configure Routing Rules yourself.",
+            "outboundSubHint": "After save, configs appear under Outbounds. With balancer name, add Routing rule balancerTag then Restart Xray.",
         }),
         ("fa_IR", {
             "outboundSubTitle": "سابسکریپشن اوتباند",
             "outboundSubBalancer": "نام بالانسر",
-            "outboundSubHint": "با نام بالانسر، اوتباندها زنده sync می‌شوند. Routing را خودتان تنظیم کنید.",
+            "outboundSubHint": "بعد از ذخیره، کانفیگ‌ها در Outbounds ظاهر می‌شوند. اگر بالانسر دارید، در Routing یک rule با balancerTag بسازید و Xray را Restart کنید.",
         }),
     ):
         path = ROOT / "web/translation" / f"translate.{code}.toml"

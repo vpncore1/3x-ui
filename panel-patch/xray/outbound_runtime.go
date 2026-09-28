@@ -76,8 +76,9 @@ func (x *XrayAPI) ListOutboundTags() ([]string, error) {
 	return tags, nil
 }
 
-// EnsureBalancer creates or refreshes a balancer pool with explicit outbound tags.
-// Does not create routing rules â€” the user configures those in the panel.
+// EnsureBalancer creates or refreshes a balancer pool.
+// outboundTags here are typically a single prefix (xray uses HasPrefix matching).
+// Does not create routing rules — the user configures those in the panel.
 func (x *XrayAPI) EnsureBalancer(balancerTag string, outboundTags []string, strategy, fallbackTag string) error {
 	if x.RoutingServiceClient == nil {
 		return fmt.Errorf("routing service not initialized")
@@ -86,7 +87,7 @@ func (x *XrayAPI) EnsureBalancer(balancerTag string, outboundTags []string, stra
 		return fmt.Errorf("balancerTag is required")
 	}
 	if len(outboundTags) == 0 {
-		return fmt.Errorf("balancer %q needs at least one outbound tag", balancerTag)
+		return fmt.Errorf("balancer %q needs at least one outbound selector", balancerTag)
 	}
 	if strings.TrimSpace(strategy) == "" {
 		strategy = "roundRobin"
@@ -100,11 +101,14 @@ func (x *XrayAPI) EnsureBalancer(balancerTag string, outboundTags []string, stra
 	if listed, err := client.ListRule(ctx, &routerCommand.ListRuleRequest{}); err == nil {
 		prefix := fmt.Sprintf("rule-%s-inbound-", balancerTag)
 		for _, r := range listed.GetRules() {
-			if strings.HasPrefix(r.GetRuleTag(), prefix) {
-				_, _ = client.RemoveRule(ctx, &routerCommand.RemoveRuleRequest{RuleTag: r.GetRuleTag()})
+			rt := r.GetRuleTag()
+			if strings.HasPrefix(rt, prefix) || rt == balancerTag {
+				_, _ = client.RemoveRule(ctx, &routerCommand.RemoveRuleRequest{RuleTag: rt})
 			}
 		}
 	}
+	// Best-effort remove existing balancer so AddRule can refresh selectors.
+	_, _ = client.RemoveRule(ctx, &routerCommand.RemoveRuleRequest{RuleTag: balancerTag})
 
 	routerCfg := &routerConf.Config{
 		BalancingRule: []*routerConf.BalancingRule{
@@ -124,10 +128,10 @@ func (x *XrayAPI) EnsureBalancer(balancerTag string, outboundTags []string, stra
 	_, err := client.AddRule(ctx, req)
 	if err != nil {
 		if st, ok := status.FromError(err); ok && st.Code() == codes.AlreadyExists {
+			// Still present after remove — treat as applied.
 			return nil
 		}
 		logger.Warningf("EnsureBalancer AddRule tag=%q: %v", balancerTag, err)
 	}
 	return err
 }
-

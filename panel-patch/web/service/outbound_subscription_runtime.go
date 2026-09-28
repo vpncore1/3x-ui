@@ -36,47 +36,90 @@ func effectiveBalancerStrategy(sub *model.OutboundSubscription) string {
 	return s
 }
 
-// ApplyRuntimeSync fetches subscription outbounds into xray and updates the balancer pool.
-// Routing rules are not touched â€” configure them manually in the panel.
-func (s *OutboundSubscriptionService) ApplyRuntimeSync(sub *model.OutboundSubscription, apiPort int) error {
-	if !UsesRuntimeSync(sub) {
-		return nil
-	}
-
-	prefix := effectiveTagPrefix(sub)
-
+func desiredOutboundsFromSub(sub *model.OutboundSubscription) ([]map[string]any, []string, error) {
 	var desired []map[string]any
 	if strings.TrimSpace(sub.LastFetchedOutbounds) != "" {
 		if err := json.Unmarshal([]byte(sub.LastFetchedOutbounds), &desired); err != nil {
-			return err
+			return nil, nil, err
 		}
 	}
-
 	outboundTags := make([]string, 0, len(desired))
 	for _, ob := range desired {
 		if tag, _ := ob["tag"].(string); strings.TrimSpace(tag) != "" {
 			outboundTags = append(outboundTags, tag)
 		}
 	}
+	return desired, outboundTags, nil
+}
+
+// ApplyTemplateSync writes subscription outbounds (and optional balancer) into the
+// xray template so they show under Outbounds and survive restart.
+func (s *OutboundSubscriptionService) ApplyTemplateSync(sub *model.OutboundSubscription) error {
+	if sub == nil {
+		return nil
+	}
+	desired, outboundTags, err := desiredOutboundsFromSub(sub)
+	if err != nil {
+		return err
+	}
+	if len(outboundTags) == 0 {
+		return common.NewError("no outbound tags in subscription")
+	}
+	return syncSubscriptionIntoTemplate(
+		&s.settingService,
+		sub.BalancerTag,
+		effectiveTagPrefix(sub),
+		effectiveBalancerStrategy(sub),
+		sub.FallbackTag,
+		desired,
+		sub.Prepend,
+	)
+}
+
+// ApplyRuntimeSync persists outbounds into the template, then hot-reloads them via gRPC.
+// Routing rules are not touched — configure them manually in the panel (balancerTag).
+func (s *OutboundSubscriptionService) ApplyRuntimeSync(sub *model.OutboundSubscription, apiPort int) error {
+	if sub == nil {
+		return nil
+	}
+
+	desired, outboundTags, err := desiredOutboundsFromSub(sub)
+	if err != nil {
+		return err
+	}
 	if len(outboundTags) == 0 {
 		return common.NewError("no outbound tags in subscription")
 	}
 
-	// Persist balancer in template first so it survives xray restarts even when gRPC is down.
-	if err := ensureBalancerInTemplate(&s.settingService, sub.BalancerTag, outboundTags, effectiveBalancerStrategy(sub), sub.FallbackTag); err != nil {
-		logger.Warningf("outbound sub %d: template balancer persist failed: %v", sub.Id, err)
-		return common.NewError("balancer template:", err)
+	prefix := effectiveTagPrefix(sub)
+
+	// Always write into template so Outbounds UI shows the configs.
+	if err := syncSubscriptionIntoTemplate(
+		&s.settingService,
+		sub.BalancerTag,
+		prefix,
+		effectiveBalancerStrategy(sub),
+		sub.FallbackTag,
+		desired,
+		sub.Prepend,
+	); err != nil {
+		logger.Warningf("outbound sub %d: template sync failed: %v", sub.Id, err)
+		return common.NewError("template sync:", err)
+	}
+
+	if !UsesRuntimeSync(sub) {
+		return nil
 	}
 
 	if apiPort <= 0 {
-		logger.Infof("outbound sub %d: balancer saved to template; restart xray to apply", sub.Id)
-		return common.NewError("xray is not running; restart xray to apply balancer")
+		logger.Infof("outbound sub %d: saved to template; restart xray to apply", sub.Id)
+		return common.NewError("xray is not running; restart xray to apply")
 	}
 
 	api := xray.XrayAPI{}
 	if err := api.Init(apiPort); err != nil {
-		logger.Infof("outbound sub %d: balancer saved to template; restart xray to apply live", sub.Id)
-		return common.NewError("xray gRPC API is not available; restart xray to apply balancer")
+		logger.Infof("outbound sub %d: saved to template; restart xray to apply live", sub.Id)
+		return common.NewError("xray gRPC API is not available; restart xray to apply")
 	}
 	defer api.Close()
 
@@ -95,8 +138,12 @@ func (s *OutboundSubscriptionService) ApplyRuntimeSync(sub *model.OutboundSubscr
 		desiredTags[tag] = ob
 	}
 
+	matchPrefix := strings.TrimSuffix(prefix, "-")
 	for _, tag := range existing {
-		if !strings.HasPrefix(tag, prefix) {
+		if matchPrefix != "" && !strings.HasPrefix(tag, matchPrefix) {
+			continue
+		}
+		if matchPrefix == "" && !strings.HasPrefix(tag, prefix) {
 			continue
 		}
 		if _, ok := desiredTags[tag]; !ok {
@@ -117,19 +164,25 @@ func (s *OutboundSubscriptionService) ApplyRuntimeSync(sub *model.OutboundSubscr
 		}
 	}
 
-	if err := api.EnsureBalancer(sub.BalancerTag, outboundTags, effectiveBalancerStrategy(sub), sub.FallbackTag); err != nil {
+	selector := balancerSelectorPrefix(prefix, sub.BalancerTag, outboundTags)
+	if err := api.EnsureBalancer(sub.BalancerTag, []string{selector}, effectiveBalancerStrategy(sub), sub.FallbackTag); err != nil {
 		logger.Warningf("outbound sub %d: live balancer gRPC failed: %v (template updated)", sub.Id, err)
 		return common.NewError("balancer live sync failed; restart xray:", err)
 	}
 	return nil
 }
 
-// RemoveRuntimeOutbounds drops all outbounds with this subscription's tag prefix from xray.
+// RemoveRuntimeOutbounds drops runtime outbounds and cleans template entries.
 func (s *OutboundSubscriptionService) RemoveRuntimeOutbounds(sub *model.OutboundSubscription, apiPort int) error {
-	if !UsesRuntimeSync(sub) || apiPort <= 0 {
+	if sub == nil {
 		return nil
 	}
 	prefix := effectiveTagPrefix(sub)
+	_ = removePrefixedOutboundsFromTemplate(&s.settingService, prefix, sub.BalancerTag)
+
+	if apiPort <= 0 {
+		return nil
+	}
 	api := xray.XrayAPI{}
 	if err := api.Init(apiPort); err != nil {
 		return err
@@ -140,8 +193,9 @@ func (s *OutboundSubscriptionService) RemoveRuntimeOutbounds(sub *model.Outbound
 	if err != nil {
 		return err
 	}
+	matchPrefix := strings.TrimSuffix(prefix, "-")
 	for _, tag := range tags {
-		if strings.HasPrefix(tag, prefix) {
+		if matchPrefix != "" && strings.HasPrefix(tag, matchPrefix) {
 			if err := api.RemoveOutbound(tag); err != nil {
 				logger.Warningf("outbound sub %d: remove %s: %v", sub.Id, tag, err)
 			}
@@ -167,4 +221,3 @@ func (s *OutboundSubscriptionService) SyncAllRuntime(apiPort int) bool {
 	}
 	return needRestart
 }
-

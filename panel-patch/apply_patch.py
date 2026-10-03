@@ -23,6 +23,9 @@ def copy_overlay() -> None:
         "web/service/outbound_subscription_runtime.go",
         "web/service/outbound_subscription_balancer.go",
         "web/service/url_safety.go",
+        "web/service/panel_self_update.go",
+        "web/service/panel_self_update_linux.go",
+        "web/service/panel_self_update_other.go",
         "web/job/outbound_subscription_job.go",
         "xray/outbound_runtime.go",
     ]
@@ -713,26 +716,180 @@ def patch_translations() -> None:
             "outboundSubTitle": "Outbound Subscriptions",
             "outboundSubBalancer": "Balancer name",
             "outboundSubHint": "After save, configs appear under Outbounds. With balancer name, add Routing rule balancerTag then Restart Xray.",
+            "panelUpdate": "Update Panel",
+            "panelUpdateCheck": "Check Update",
+            "panelUpdateConfirm": "Update panel from vpncore1/3x-ui now? The panel will restart. This never runs automatically.",
+            "panelUpdateStarted": "Update started. Wait 1–3 minutes then refresh.",
+            "panelUpdateAvailable": "Update available",
+            "panelUpdateLatest": "Up to date",
         }),
         ("fa_IR", {
             "outboundSubTitle": "سابسکریپشن اوتباند",
             "outboundSubBalancer": "نام بالانسر",
             "outboundSubHint": "بعد از ذخیره، کانفیگ‌ها در Outbounds ظاهر می‌شوند. اگر بالانسر دارید، در Routing یک rule با balancerTag بسازید و Xray را Restart کنید.",
+            "panelUpdate": "آپدیت پنل",
+            "panelUpdateCheck": "بررسی آپدیت",
+            "panelUpdateConfirm": "پنل از vpncore1/3x-ui آپدیت شود؟ پنل ری‌استارت می‌شود. این کار هرگز خودکار نیست.",
+            "panelUpdateStarted": "آپدیت شروع شد. ۱ تا ۳ دقیقه صبر کنید و صفحه را رفرش کنید.",
+            "panelUpdateAvailable": "آپدیت موجود است",
+            "panelUpdateLatest": "به‌روز است",
         }),
     ):
         path = ROOT / "web/translation" / f"translate.{code}.toml"
         if not path.exists():
             continue
         raw = path.read_text(encoding="utf-8")
-        if "outboundSubTitle" in raw:
-            continue
-        # Append under [pages.xray] if present, else end of file
-        block = "\n".join(f'{k} = "{v}"' for k, v in pairs.items()) + "\n"
-        if "[pages.xray]" in raw:
-            raw = raw.replace("[pages.xray]", "[pages.xray]\n" + block, 1)
-        else:
-            raw += "\n[pages.xray]\n" + block
+        # pages.xray keys
+        xray_keys = {k: v for k, v in pairs.items() if k.startswith("outbound")}
+        index_keys = {k: v for k, v in pairs.items() if k.startswith("panelUpdate")}
+        if xray_keys and "outboundSubTitle" not in raw:
+            block = "\n".join(f'{k} = "{v}"' for k, v in xray_keys.items()) + "\n"
+            if "[pages.xray]" in raw:
+                raw = raw.replace("[pages.xray]", "[pages.xray]\n" + block, 1)
+            else:
+                raw += "\n[pages.xray]\n" + block
+        if index_keys and "panelUpdate" not in raw:
+            block = "\n".join(f'{k} = "{v}"' for k, v in index_keys.items()) + "\n"
+            if "[pages.index]" in raw:
+                raw = raw.replace("[pages.index]", "[pages.index]\n" + block, 1)
+            else:
+                raw += "\n[pages.index]\n" + block
         path.write_text(raw, encoding="utf-8")
+
+
+def patch_server_controller() -> None:
+    path = ROOT / "web/controller/server.go"
+    text = path.read_text(encoding="utf-8")
+    if "updatePanel" in text:
+        return
+    text = text.replace(
+        '\tg.POST("/getNewEchCert", a.getNewEchCert)\n',
+        '\tg.POST("/getNewEchCert", a.getNewEchCert)\n'
+        '\tg.GET("/panelUpdateInfo", a.getPanelUpdateInfo)\n'
+        '\tg.POST("/updatePanel", a.updatePanel)\n',
+    )
+    handlers = r'''
+
+// getPanelUpdateInfo reports whether a newer commit exists on vpncore1/3x-ui (check only).
+func (a *ServerController) getPanelUpdateInfo(c *gin.Context) {
+	info, err := a.serverService.GetPanelUpdateInfo()
+	if err != nil {
+		jsonMsgObj(c, "Failed to check panel update", info, err)
+		return
+	}
+	jsonObj(c, info, nil)
+}
+
+// updatePanel starts a manual upgrade from vpncore1/3x-ui. Never runs automatically.
+func (a *ServerController) updatePanel(c *gin.Context) {
+	if err := a.serverService.StartPanelSelfUpdate(); err != nil {
+		jsonMsg(c, "Failed to start panel update", err)
+		return
+	}
+	jsonMsg(c, "Panel update started; wait then refresh", nil)
+}
+'''
+    if "func (a *ServerController) getPanelUpdateInfo" not in text:
+        text = text.rstrip() + "\n" + handlers + "\n"
+    # Ensure jsonMsgObj import usage exists in base — it is used elsewhere in controllers.
+    path.write_text(text, encoding="utf-8")
+
+
+def patch_index_update_button() -> None:
+    path = ROOT / "web/html/index.html"
+    text = path.read_text(encoding="utf-8")
+    if "updatePanelNow" in text:
+        return
+
+    # Add Update action on the 3X-UI card
+    card_anchor = "                <a-card title='3X-UI' hoverable>\n"
+    if card_anchor not in text:
+        raise RuntimeError("patch_index_update_button: 3X-UI card not found")
+    card_inject = '''                <a-card title='3X-UI' hoverable>
+                  <template #actions>
+                    <a-space direction="horizontal" @click="checkPanelUpdate" class="jc-center">
+                      <a-icon type="cloud-sync"></a-icon>
+                      <span v-if="!isMobile">{{ i18n "pages.index.panelUpdateCheck" }}</span>
+                    </a-space>
+                    <a-space direction="horizontal" @click="updatePanelNow" class="jc-center">
+                      <a-icon type="cloud-download"></a-icon>
+                      <span v-if="!isMobile">{{ i18n "pages.index.panelUpdate" }}</span>
+                      <a-badge v-if="panelUpdate && panelUpdate.updateAvailable" status="processing" />
+                    </a-space>
+                  </template>
+'''
+    text = text.replace(card_anchor, card_inject, 1)
+
+    # After version tag, show update status line
+    ver_anchor = '                      <span>v{{ .cur_ver }}</span>\n'
+    if ver_anchor in text:
+        text = text.replace(
+            ver_anchor,
+            '                      <span>v{{ .cur_ver }}</span>\n'
+            '                      <a-tag v-if="panelUpdate && panelUpdate.updateAvailable" color="orange" :style="{ marginLeft: \'6px\' }">\n'
+            '                        {{ i18n "pages.index.panelUpdateAvailable" }}\n'
+            '                      </a-tag>\n'
+            '                      <a-tag v-else-if="panelUpdate && panelUpdate.remoteSha" color="blue" :style="{ marginLeft: \'6px\' }">\n'
+            '                        {{ i18n "pages.index.panelUpdateLatest" }}\n'
+            '                      </a-tag>\n',
+            1,
+        )
+
+    # data field
+    if "panelUpdate:" not in text:
+        text = text.replace(
+            "      versionModal,\n",
+            "      versionModal,\n"
+            "      panelUpdate: null,\n"
+            "      panelUpdating: false,\n",
+            1,
+        )
+
+    methods = '''
+      async checkPanelUpdate() {
+        const msg = await HttpUtil.get('/panel/api/server/panelUpdateInfo');
+        if (msg.success) {
+          this.panelUpdate = msg.obj;
+        }
+      },
+      updatePanelNow() {
+        this.$confirm({
+          title: '{{ i18n "pages.index.panelUpdate" }}',
+          content: '{{ i18n "pages.index.panelUpdateConfirm" }}',
+          okText: '{{ i18n "confirm"}}',
+          cancelText: '{{ i18n "cancel"}}',
+          class: themeSwitcher.currentTheme,
+          onOk: async () => {
+            this.panelUpdating = true;
+            this.loading(true, '{{ i18n "pages.index.panelUpdateStarted" }}');
+            const msg = await HttpUtil.post('/panel/api/server/updatePanel');
+            this.panelUpdating = false;
+            this.loading(false);
+            if (msg.success) {
+              this.$message.success('{{ i18n "pages.index.panelUpdateStarted" }}');
+              setTimeout(() => { this.checkPanelUpdate(); }, 15000);
+            }
+          },
+        });
+      },
+'''
+    text = text.replace("      switchV2rayVersion(version) {\n", methods + "      switchV2rayVersion(version) {\n", 1)
+
+    # Load update info once on mount (check only — never auto-upgrade)
+    if "this.checkPanelUpdate();" not in text:
+        # Prefer inserting near getStatus() call in mounted/created
+        m = re.search(r"mounted\(\)\s*\{", text)
+        if m:
+            # find end of first few lines inside mounted
+            insert_at = text.find("\n", m.end())
+            text = text[:insert_at+1] + "      this.checkPanelUpdate();\n" + text[insert_at+1:]
+        else:
+            m2 = re.search(r"created\(\)\s*\{", text)
+            if m2:
+                insert_at = text.find("\n", m2.end())
+                text = text[:insert_at+1] + "      this.checkPanelUpdate();\n" + text[insert_at+1:]
+
+    path.write_text(text, encoding="utf-8")
 
 
 def reset_git_files() -> None:
@@ -742,11 +899,13 @@ def reset_git_files() -> None:
         "database/model/model.go",
         "database/db.go",
         "web/controller/xray_setting.go",
+        "web/controller/server.go",
         "web/service/xray.go",
         "web/web.go",
         "xray/api.go",
         "web/html/settings/xray/outbounds.html",
         "web/html/xray.html",
+        "web/html/index.html",
         "web/translation/translate.en_US.toml",
         "web/translation/translate.fa_IR.toml",
     ]
@@ -769,10 +928,12 @@ def main() -> None:
     patch_xray_service()
     patch_web_cron()
     patch_controller()
+    patch_server_controller()
     patch_vue_outbounds()
     patch_vue_xray_js()
+    patch_index_update_button()
     patch_translations()
-    print("panel-patch (v2.9.0 + subscriptions + balancer) applied to", ROOT)
+    print("panel-patch (v2.9.0 + subscriptions + balancer + self-update) applied to", ROOT)
 
 
 if __name__ == "__main__":

@@ -50,6 +50,25 @@ mkdir -p /usr/local/x-ui/web
 rsync -a --delete "$BUILD_DIR/web/html/" /usr/local/x-ui/web/html/ 2>/dev/null || true
 rsync -a "$BUILD_DIR/web/translation/" /usr/local/x-ui/web/translation/ 2>/dev/null || true
 rsync -a "$BUILD_DIR/web/assets/" /usr/local/x-ui/web/assets/ 2>/dev/null || true
+
+# Stamp installed patch commit so the in-panel Update button can detect new versions.
+# Source is the cloned vpncore1/3x-ui tree when run via upgrade.sh (parent of panel-patch).
+PATCH_REPO_DIR="$(cd "$PATCH_DIR/.." && pwd)"
+PATCH_SHA="$(git -C "$PATCH_REPO_DIR" rev-parse HEAD 2>/dev/null || true)"
+if [[ -z "$PATCH_SHA" ]]; then
+  PATCH_SHA="$(git -C "$PATCH_DIR" rev-parse HEAD 2>/dev/null || true)"
+fi
+if [[ -n "$PATCH_SHA" ]]; then
+  cat > /usr/local/x-ui/panel-patch.version <<EOF
+sha=${PATCH_SHA}
+version=${TAG}-sub-balancer
+updated_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+repo=vpncore1/3x-ui
+branch=main
+EOF
+  echo "==> Wrote panel-patch.version sha=${PATCH_SHA:0:7}"
+fi
+
 systemctl start x-ui
 sleep 2
 systemctl is-active x-ui

@@ -875,19 +875,22 @@ def patch_index_update_button() -> None:
 '''
     text = text.replace("      switchV2rayVersion(version) {\n", methods + "      switchV2rayVersion(version) {\n", 1)
 
-    # Load update info once on mount (check only — never auto-upgrade)
-    if "this.checkPanelUpdate();" not in text:
-        if "await this.getStatus();" in text:
+    # Load update info once on mount (check only — never auto-upgrade).
+    # Note: method bodies already contain this.checkPanelUpdate(), so use a unique marker.
+    if "panelUpdateCheckOnMount" not in text:
+        anchor = "      // Initial status fetch\n      await this.getStatus();\n"
+        if anchor in text:
             text = text.replace(
-                "await this.getStatus();",
-                "await this.getStatus();\n      this.checkPanelUpdate();",
+                anchor,
+                anchor + "      this.checkPanelUpdate(); // panelUpdateCheckOnMount\n",
                 1,
             )
         else:
-            m = re.search(r"async mounted\(\)\s*\{", text)
-            if m:
-                insert_at = text.find("\n", m.end())
-                text = text[:insert_at+1] + "      this.checkPanelUpdate();\n" + text[insert_at+1:]
+            text = text.replace(
+                "      await this.getStatus();\n",
+                "      await this.getStatus();\n      this.checkPanelUpdate(); // panelUpdateCheckOnMount\n",
+                1,
+            )
 
     path.write_text(text, encoding="utf-8")
 

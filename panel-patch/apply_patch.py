@@ -203,8 +203,49 @@ func mergeSubscriptionOutbounds(cfg *xray.Config, prepend, appendList []any) {
 	}
 	cfg.OutboundConfigs = json_util.RawMessage(combined)
 }
+
+// sanitizeOutboundHeaders strips null/empty HTTP camouflage headers from every
+// outbound, including stale template entries. Xray refuses to start otherwise.
+func sanitizeOutboundHeaders(cfg *xray.Config) {
+	if len(cfg.OutboundConfigs) == 0 {
+		return
+	}
+	var outbounds []any
+	if err := json.Unmarshal(cfg.OutboundConfigs, &outbounds); err != nil {
+		return
+	}
+	changed := false
+	for _, item := range outbounds {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		before, _ := json.Marshal(m)
+		link.SanitizeOutboundHTTPHeaders(m)
+		after, _ := json.Marshal(m)
+		if string(before) != string(after) {
+			changed = true
+		}
+	}
+	if !changed {
+		return
+	}
+	combined, err := json.MarshalIndent(outbounds, "", "  ")
+	if err != nil {
+		return
+	}
+	cfg.OutboundConfigs = json_util.RawMessage(combined)
+}
 '''
         text = text.rstrip() + "\n" + merge_fn + "\n"
+
+        if '"github.com/mhsanaei/3x-ui/v2/util/link"' not in text:
+            text = text.replace(
+                '"github.com/mhsanaei/3x-ui/v2/util/json_util"\n',
+                '"github.com/mhsanaei/3x-ui/v2/util/json_util"\n'
+                '\t"github.com/mhsanaei/3x-ui/v2/util/link"\n',
+                1,
+            )
 
         # Inject merge call before final return of GetXrayConfig
         old = "\t\tinboundConfig := inbound.GenXrayInboundConfig()\n\t\txrayConfig.InboundConfigs = append(xrayConfig.InboundConfigs, *inboundConfig)\n\t}\n\treturn xrayConfig, nil\n}"
@@ -215,7 +256,8 @@ func mergeSubscriptionOutbounds(cfg *xray.Config, prepend, appendList []any) {
             "\tsubSvc := &OutboundSubscriptionService{}\n"
             "\tif prepend, appendList, err := subSvc.activeOutboundsSplit(); err == nil && (len(prepend) > 0 || len(appendList) > 0) {\n"
             "\t\tmergeSubscriptionOutbounds(xrayConfig, prepend, appendList)\n"
-            "\t}\n\n"
+            "\t}\n"
+            "\tsanitizeOutboundHeaders(xrayConfig)\n\n"
             "\treturn xrayConfig, nil\n}"
         )
         if old not in text:

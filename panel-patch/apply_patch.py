@@ -877,16 +877,16 @@ def patch_index_update_button() -> None:
 
     # Load update info once on mount (check only — never auto-upgrade)
     if "this.checkPanelUpdate();" not in text:
-        # Prefer inserting near getStatus() call in mounted/created
-        m = re.search(r"mounted\(\)\s*\{", text)
-        if m:
-            # find end of first few lines inside mounted
-            insert_at = text.find("\n", m.end())
-            text = text[:insert_at+1] + "      this.checkPanelUpdate();\n" + text[insert_at+1:]
+        if "await this.getStatus();" in text:
+            text = text.replace(
+                "await this.getStatus();",
+                "await this.getStatus();\n      this.checkPanelUpdate();",
+                1,
+            )
         else:
-            m2 = re.search(r"created\(\)\s*\{", text)
-            if m2:
-                insert_at = text.find("\n", m2.end())
+            m = re.search(r"async mounted\(\)\s*\{", text)
+            if m:
+                insert_at = text.find("\n", m.end())
                 text = text[:insert_at+1] + "      this.checkPanelUpdate();\n" + text[insert_at+1:]
 
     path.write_text(text, encoding="utf-8")

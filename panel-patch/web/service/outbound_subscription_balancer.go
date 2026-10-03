@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/mhsanaei/3x-ui/v2/util/link"
 )
 
 // UnwrapXrayTemplateConfig peels accidental nested {"xraySetting": ...} wrappers.
@@ -167,8 +169,9 @@ func syncSubscriptionIntoTemplate(settingSvc *SettingService, balancerTag, tagPr
 	}
 
 	outboundTags := make([]string, 0, len(desired))
-	for _, ob := range desired {
-		if tag, _ := ob["tag"].(string); strings.TrimSpace(tag) != "" {
+	for i := range desired {
+		link.SanitizeOutboundHTTPHeaders(desired[i])
+		if tag, _ := desired[i]["tag"].(string); strings.TrimSpace(tag) != "" {
 			outboundTags = append(outboundTags, tag)
 		}
 	}

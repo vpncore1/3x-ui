@@ -182,17 +182,7 @@ func parseVmess(link string) (*ParseResult, error) {
 		}
 	case "tcp":
 		if getString(j, "type", "") == "http" {
-			stream["tcpSettings"] = map[string]any{
-				"header": map[string]any{
-					"type": "http",
-					"request": map[string]any{
-						"version": "1.1",
-						"method":  "GET",
-						"path":    splitComma(getString(j, "path", "/")),
-						"headers": map[string]any{"Host": splitComma(getString(j, "host", ""))},
-					},
-				},
-			}
+			stream["tcpSettings"] = tcpHTTPSettings(getString(j, "host", ""), getString(j, "path", "/"))
 		}
 	}
 
@@ -607,18 +597,97 @@ func applyTransport(stream map[string]any, p url.Values) {
 		}
 	case "tcp":
 		if p.Get("headerType") == "http" || p.Get("type") == "http" {
-			stream["tcpSettings"] = map[string]any{
-				"header": map[string]any{
-					"type": "http",
-					"request": map[string]any{
-						"version": "1.1",
-						"method":  "GET",
-						"path":    splitComma(path),
-						"headers": map[string]any{"Host": splitComma(host)},
-					},
-				},
+			stream["tcpSettings"] = tcpHTTPSettings(host, path)
+		}
+	}
+}
+
+// tcpHTTPSettings builds tcpSettings with HTTP camouflage.
+// Never emits Host: null — Xray rejects empty HTTP header values.
+func tcpHTTPSettings(host, path string) map[string]any {
+	headers := map[string]any{}
+	if hostVals := splitComma(host); len(hostVals) > 0 {
+		headers["Host"] = hostVals
+	}
+	pathVals := splitComma(path)
+	if len(pathVals) == 0 {
+		pathVals = []string{"/"}
+	}
+	return map[string]any{
+		"header": map[string]any{
+			"type": "http",
+			"request": map[string]any{
+				"version": "1.1",
+				"method":  "GET",
+				"path":    pathVals,
+				"headers": headers,
+			},
+		},
+	}
+}
+
+// SanitizeOutboundHTTPHeaders removes null/empty Host (and similar) values from
+// tcp HTTP camouflage headers so Xray can load the config.
+func SanitizeOutboundHTTPHeaders(ob map[string]any) {
+	if ob == nil {
+		return
+	}
+	stream, _ := ob["streamSettings"].(map[string]any)
+	if stream == nil {
+		return
+	}
+	tcp, _ := stream["tcpSettings"].(map[string]any)
+	if tcp == nil {
+		return
+	}
+	header, _ := tcp["header"].(map[string]any)
+	if header == nil {
+		return
+	}
+	req, _ := header["request"].(map[string]any)
+	if req == nil {
+		return
+	}
+	headers, _ := req["headers"].(map[string]any)
+	if headers == nil {
+		return
+	}
+	for k, v := range headers {
+		if isEmptyHeaderValue(v) {
+			delete(headers, k)
+		}
+	}
+}
+
+func isEmptyHeaderValue(v any) bool {
+	switch t := v.(type) {
+	case nil:
+		return true
+	case string:
+		return strings.TrimSpace(t) == ""
+	case []any:
+		if len(t) == 0 {
+			return true
+		}
+		for _, item := range t {
+			s, ok := item.(string)
+			if !ok || strings.TrimSpace(s) == "" {
+				return true
 			}
 		}
+		return false
+	case []string:
+		if len(t) == 0 {
+			return true
+		}
+		for _, s := range t {
+			if strings.TrimSpace(s) == "" {
+				return true
+			}
+		}
+		return false
+	default:
+		return false
 	}
 }
 

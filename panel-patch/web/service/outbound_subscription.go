@@ -322,6 +322,11 @@ func (s *OutboundSubscriptionService) fetchAndStore(sub *model.OutboundSubscript
 	// back into the parsed outbounds in place.
 	assigned := assignStableTags(parsed, identities, prev, prevTagByIndex, sub.Id, sub.TagPrefix)
 
+	// Drop null/empty HTTP Host headers — Xray refuses to start with them.
+	for i := range parsed {
+		link.SanitizeOutboundHTTPHeaders(parsed[i])
+	}
+
 	// Persist identities for next time
 	newIdent := map[string]string{}
 	for i, id := range identities {
